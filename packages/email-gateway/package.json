@@ -1,0 +1,20 @@
+{
+  "name": "@summon/email-gateway",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@summon/shared": "workspace:*",
+    "@temporalio/client": "^1.12.2",
+    "agentmail": "^0.4.15",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

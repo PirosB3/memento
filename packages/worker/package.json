@@ -1,0 +1,25 @@
+{
+  "name": "@summon/worker",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/worker.ts",
+    "start": "tsx src/worker.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.81.0",
+    "@summon/shared": "workspace:*",
+    "@temporalio/activity": "^1.12.2",
+    "@temporalio/client": "^1.12.2",
+    "@temporalio/worker": "^1.12.2",
+    "@temporalio/workflow": "^1.12.2",
+    "agentmail": "^0.4.15",
+    "@sinclair/typebox": "^0.34.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

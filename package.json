@@ -1,0 +1,45 @@
+{
+  "name": "summon-agents",
+  "private": true,
+  "scripts": {
+    "dev": "./scripts/dev.sh",
+    "dev:web": "pnpm --filter @summon/web dev",
+    "dev:worker": "pnpm --filter @summon/worker dev",
+    "dev:gateway": "pnpm --filter @summon/email-gateway dev",
+    "oauth:openai": "node scripts/oauth-openai-codex.mjs",
+    "db:generate": "dotenv -e .env -- pnpm --filter @summon/shared db:generate",
+    "db:push": "dotenv -e .env -- pnpm --filter @summon/shared db:push",
+    "db:migrate:dev": "dotenv -e .env -- pnpm --filter @summon/shared db:migrate:dev",
+    "db:migrate:deploy": "dotenv -e .env -- pnpm --filter @summon/shared db:migrate:deploy",
+    "db:migrate:reset": "dotenv -e .env -- pnpm --filter @summon/shared db:migrate:reset",
+    "db:migrate:status": "dotenv -e .env -- pnpm --filter @summon/shared db:migrate:status",
+    "db:studio": "dotenv -e .env -- pnpm --filter @summon/shared db:studio",
+    "build": "pnpm -r build",
+    "test": "pnpm test:unit && pnpm test:integration && pnpm test:workflow",
+    "test:unit": "dotenv -e .env.test -- vitest run --project unit",
+    "test:integration": "dotenv -e .env.test -- vitest run --project integration",
+    "test:workflow": "dotenv -e .env.test -- vitest run --project workflow",
+    "test:e2e": "playwright test",
+    "test:smoke": "pnpm test:unit && pnpm test:integration && dotenv -e .env.test -- playwright test --grep @smoke"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@temporalio/testing": "^1.15.0",
+    "dotenv-cli": "^11.0.0",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "@swc/core",
+      "esbuild",
+      "prisma",
+      "protobufjs"
+    ]
+  }
+}

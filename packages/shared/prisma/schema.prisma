@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Agent {
+  agentId       String   @id @map("agent_id")
+  name          String
+  agentEmail    String   @unique @map("agent_email")
+  ownerEmail    String   @map("owner_email")
+  soul          String
+  boundaries    String
+  tools         String
+  status        String   @default("IDLE")
+  temporalRunId String   @map("temporal_run_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tasks     Task[]
+  schedules Schedule[]
+
+  @@map("agents")
+}
+
+model Task {
+  taskId         String    @id @map("task_id")
+  agentId        String    @map("agent_id")
+  tag            String    @unique
+  objective      String
+  status         String    @default("RUNNING")
+  isRoot         Boolean   @default(false) @map("is_root")
+  parentTaskId   String?   @map("parent_task_id")
+  temporalRunId  String?   @map("temporal_run_id")
+  maxTurns       Int       @default(20) @map("max_turns")
+  timeoutHours   Int       @default(72) @map("timeout_hours")
+  lastActivityAt DateTime  @default(now()) @map("last_activity_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  completedAt    DateTime? @map("completed_at")
+
+  compactedSummary   String? @map("compacted_summary")
+  compactedPrefix    Json?   @map("compacted_prefix")
+  compactedThroughId Int?    @map("compacted_through_id")
+
+  agent      Agent  @relation(fields: [agentId], references: [agentId], onDelete: Cascade)
+  parentTask Task?  @relation("TaskSubtasks", fields: [parentTaskId], references: [taskId])
+  subtasks   Task[] @relation("TaskSubtasks")
+
+  conversations Conversation[]
+  turnLogs      AgentTurnLog[]
+  schedules     Schedule[]
+
+  @@index([agentId])
+  @@index([tag])
+  @@map("tasks")
+}
+
+model Conversation {
+  id        Int      @id @default(autoincrement())
+  taskId    String   @map("task_id")
+  role      String
+  message   String
+  timestamp DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
+
+  @@index([taskId, id])
+  @@map("conversations")
+}
+
+model AgentTurnLog {
+  id             Int      @id @default(autoincrement())
+  taskId         String   @map("task_id")
+  turnNumber     Int      @map("turn_number")
+  fromState      String   @map("from_state")
+  toState        String   @map("to_state")
+  trigger        String
+  wakeReflection String?  @map("wake_reflection")
+  stopReason     String?  @map("stop_reason")
+  timestamp      DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
+
+  @@index([taskId, turnNumber])
+  @@map("agent_turn_logs")
+}
+
+model Schedule {
+  scheduleId       String   @id @map("schedule_id")
+  taskId           String   @map("task_id")
+  agentId          String   @map("agent_id")
+  targetWorkflowId String   @map("target_workflow_id")
+  fireAt           DateTime @map("fire_at")
+  message          String
+  status           String   @default("PENDING")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  task  Task  @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
+  agent Agent @relation(fields: [agentId], references: [agentId], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([agentId])
+  @@map("schedules")
+}
+
+model ProcessedEmail {
+  messageId   String   @id @map("message_id")
+  inboxId     String   @map("inbox_id")
+  processedAt DateTime @default(now()) @map("processed_at")
+
+  @@map("processed_emails")
+}
