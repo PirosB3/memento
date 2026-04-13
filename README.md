@@ -1,5 +1,7 @@
 # Memento
 
+![Memento](./docs/images/memento-hero.jpg)
+
 > **Most of what I want agents to do isn't a prompt. It's a goal.**
 
 Memento is an exploration artifact. I'm testing a thesis: agents become materially useful when they're embedded in **durable workflows** that let them sleep, wake on real signals, and keep pursuing a goal across days — not when they're treated as one-shot prompt responders.
@@ -42,3 +44,7 @@ Lou is my household grocery coordinator. He starts a cart every Tuesday and Thur
 - **Trust and autonomy.** Where does trust break? How much autonomy do people actually want to grant an agent that acts on their behalf while they're not watching?
 
 I have a direction, not fake certainty. If any of this resonates — or if you think the thesis is wrong — I'd love to hear it.
+
+## Read more
+
+[**Memento: agents that sleep, wake, and follow up**](https://x.com/pirosb3/status/2042993411473518656) — the longer-form write-up on X.
