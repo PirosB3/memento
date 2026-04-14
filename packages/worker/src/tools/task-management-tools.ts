@@ -234,7 +234,8 @@ export function createGetTaskConversationTool(): AgentTool {
           take: limit ?? 20,
         });
 
-        const formatted = messages.reverse().map((m) => {
+        // oxlint-disable-next-line no-array-reverse -- target is ES2022, toReversed requires ES2023
+        const formatted = [...messages].reverse().map((m) => {
           try {
             const parsed = JSON.parse(m.message);
             const content = typeof parsed.content === "string"

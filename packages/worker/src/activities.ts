@@ -408,7 +408,8 @@ export async function getTaskConversation(
     orderBy: { id: "desc" },
     take: limit,
   });
-  return messages.reverse().map((m) => {
+  // oxlint-disable-next-line no-array-reverse -- target is ES2022, toReversed requires ES2023
+  return [...messages].reverse().map((m) => {
     try {
       const parsed = JSON.parse(m.message);
       return { role: parsed.role, content: parsed.content, timestamp: parsed.timestamp };
