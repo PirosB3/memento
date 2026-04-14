@@ -101,7 +101,7 @@ export async function pollInbox(
   // Fetch recent messages from agentmail
   const response = await agentmail.inboxes.messages.list(agent.agentEmail, {
     limit: 20,
-  }) as Record<string, unknown>;
+  }) as unknown as Record<string, unknown>;
 
   const messages = (response.messages ?? response.data ?? response) as Record<string, unknown>[];
   if (!Array.isArray(messages) || messages.length === 0) return;
