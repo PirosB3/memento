@@ -188,17 +188,23 @@ describe("agentmail tools", () => {
     }
   });
 
-  it("supports reply-all and attachments on replies", async () => {
+  it("manually constructs reply-all recipients for a child task (no replyAll flag, +tag in cc)", async () => {
     const agentDir = createTempAgentDir();
     fs.writeFileSync(path.join(agentDir, "notes.txt"), "reply attachment", "utf-8");
 
+    const get = vi.fn().mockResolvedValue({
+      messageId: "orig-msg",
+      from: "ryan@rain.xyz",
+      to: ["daniel@example.com", "avery@agentmail.test"],
+      cc: ["observer@example.com"],
+    });
     const reply = vi.fn().mockResolvedValue({ messageId: "msg-reply" });
     setAgentMailClientForTests({
       inboxes: {
         messages: {
           send: vi.fn(),
           reply,
-          get: vi.fn(),
+          get,
           list: vi.fn(),
         },
         threads: {
@@ -217,13 +223,14 @@ describe("agentmail tools", () => {
       attachments: [{ path: "notes.txt", filename: "reply.txt", contentType: "text/plain" }],
     });
 
-    expect(reply).toHaveBeenCalledWith(
-      "avery@agentmail.test",
-      "orig-msg",
+    expect(get).toHaveBeenCalledWith("avery@agentmail.test", "orig-msg");
+
+    const [, , payload] = reply.mock.calls[0];
+    expect(payload).toEqual(
       expect.objectContaining({
         text: "Reply body",
-        replyAll: true,
-        cc: ["owner@example.com", "avery+abc123@agentmail.test"],
+        to: ["ryan@rain.xyz"],
+        cc: ["daniel@example.com", "observer@example.com", "owner@example.com", "avery+abc123@agentmail.test"],
         bcc: ["audit@example.com"],
         attachments: [
           expect.objectContaining({
@@ -234,10 +241,115 @@ describe("agentmail tools", () => {
         ],
       }),
     );
+    expect(payload).not.toHaveProperty("replyAll");
     expect(result.content[0]?.type).toBe("text");
     if (result.content[0]?.type === "text") {
       expect(result.content[0].text).toContain("reply-all");
       expect(result.content[0].text).toContain("1 attachment (reply.txt)");
+    }
+  });
+
+  it("uses the native replyAll flag for root task replies (no tag, no manual construction)", async () => {
+    const agentDir = createTempAgentDir();
+    const get = vi.fn();
+    const reply = vi.fn().mockResolvedValue({ messageId: "msg-reply-root" });
+    setAgentMailClientForTests({
+      inboxes: {
+        messages: {
+          send: vi.fn(),
+          reply,
+          get,
+          list: vi.fn(),
+        },
+        threads: {
+          list: vi.fn(),
+        },
+      },
+    });
+
+    const tool = createReplyEmailTool("avery@agentmail.test", agentDir);
+    await tool.execute("call-root-reply", {
+      messageId: "orig-msg",
+      body: "Root reply",
+      replyAll: true,
+    });
+
+    expect(get).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith(
+      "avery@agentmail.test",
+      "orig-msg",
+      expect.objectContaining({
+        text: "Root reply",
+        replyAll: true,
+      }),
+    );
+  });
+
+  it("falls back to original recipients when replying to own sent message (child task)", async () => {
+    const agentDir = createTempAgentDir();
+    const get = vi.fn().mockResolvedValue({
+      messageId: "orig-msg",
+      from: "avery+abc123@agentmail.test",
+      to: ["ryan@rain.xyz", "daniel@example.com"],
+      cc: [],
+    });
+    const reply = vi.fn().mockResolvedValue({ messageId: "msg-reply-fallback" });
+    setAgentMailClientForTests({
+      inboxes: {
+        messages: {
+          send: vi.fn(),
+          reply,
+          get,
+          list: vi.fn(),
+        },
+        threads: {
+          list: vi.fn(),
+        },
+      },
+    });
+
+    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, "abc123");
+    await tool.execute("call-self-from", {
+      messageId: "orig-msg",
+      body: "Bump",
+      replyAll: true,
+    });
+
+    const [, , payload] = reply.mock.calls[0];
+    expect(payload.to).toEqual(["ryan@rain.xyz"]);
+    expect(payload.cc).toEqual(["daniel@example.com", "avery+abc123@agentmail.test"]);
+    expect(payload).not.toHaveProperty("replyAll");
+  });
+
+  it("surfaces an error when reply-all cannot fetch the original message", async () => {
+    const agentDir = createTempAgentDir();
+    const get = vi.fn().mockRejectedValue(new Error("404 not found"));
+    const reply = vi.fn();
+    setAgentMailClientForTests({
+      inboxes: {
+        messages: {
+          send: vi.fn(),
+          reply,
+          get,
+          list: vi.fn(),
+        },
+        threads: {
+          list: vi.fn(),
+        },
+      },
+    });
+
+    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, "abc123");
+    const result = await tool.execute("call-fetch-fail", {
+      messageId: "missing-msg",
+      body: "hi",
+      replyAll: true,
+    });
+
+    expect(reply).not.toHaveBeenCalled();
+    expect(result.details).toEqual({ error: true });
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toContain("could not fetch original message for reply-all");
     }
   });
 
