@@ -13,18 +13,24 @@ import type { InboundEmail } from "@summon/shared";
 const POLL_INTERVAL_MS = 15_000;
 const log = createLogger("email-gateway");
 
+/**
+ * A parsed inbound message ready for routing. `isOwner` and `tag` are resolved
+ * once here so the routing step doesn't need to re-parse.
+ */
 interface PendingInboundMessage {
   messageId: string;
-  from: string;
   timestamp: string;
   senderEmail: string;
   isOwner: boolean;
   tag: string | null;
 }
 
-interface SignalBatch {
+/**
+ * Accumulated batch of participant emails headed for the same workflow.
+ * Owner emails are NOT batched — see `deliverMessages` for why.
+ */
+interface ParticipantBatch {
   workflowId: string;
-  signalType: "email" | "owner";
   tag?: string;
   messageIds: string[];
   senders: string[];
@@ -111,12 +117,18 @@ export function isSelfSentEmail(fromField: string, agentEmail: string): boolean 
     .includes(agentEmail.split("@")[0].toLowerCase() + "@");
 }
 
+/**
+ * Poll an agent's inbox for new messages and dispatch them to the right
+ * Temporal workflow. Participant emails destined for the same workflow are
+ * batched into a single `on_email` signal so the agent wakes once per poll
+ * cycle instead of once per message. Owner emails are delivered one-per-signal
+ * because the worker's owner-wake path expects a deterministic messageId.
+ */
 export async function pollInbox(
   agentmail: AgentMailClient,
   temporal: Client,
   agent: { agentId: string; agentEmail: string; ownerEmail: string },
 ) {
-  // Fetch recent messages from agentmail
   const response = await agentmail.inboxes.messages.list(agent.agentEmail, {
     limit: 20,
   }) as unknown as Record<string, unknown>;
@@ -124,72 +136,16 @@ export async function pollInbox(
   const messages = (response.messages ?? response.data ?? response) as Record<string, unknown>[];
   if (!Array.isArray(messages) || messages.length === 0) return;
 
-  log.info(`  [${agent.agentId}] Found ${messages.length} messages, checking for unprocessed inbound...`);
+  const pending = await collectPendingMessages(messages, agent);
+  if (pending.length === 0) return;
 
-  // Filter to received messages only (skip sent)
-  const inbound = messages.filter((m: Record<string, unknown>) => {
-    const labels = m.labels as string[] | undefined;
-    return labels?.includes("received");
-  });
+  log.info(`  [${agent.agentId}] Dispatching ${pending.length} new message(s)`);
 
-  if (inbound.length === 0) return;
-
-  const pendingMessages: PendingInboundMessage[] = [];
-
-  for (const msg of inbound) {
-    const messageId = (msg as Record<string, unknown>).messageId as string
-      ?? (msg as Record<string, unknown>).message_id as string;
-
-    if (!messageId) continue;
-
-    // Skip emails sent by the agent itself (prevents self-wake loops)
-    const fromField = ((msg as Record<string, unknown>).from as string ?? "").toLowerCase();
-    if (isSelfSentEmail(fromField, agent.agentEmail)) {
-      continue;
-    }
-
-    // Check if already processed
-    const existing = await prisma.processedEmail.findUnique({
-      where: { messageId },
-    });
-    if (existing) continue;
-
-    const from = (msg as Record<string, unknown>).from as string ?? "";
-    const timestamp = (msg as Record<string, unknown>).timestamp as string
-      ?? (msg as Record<string, unknown>).created_at as string
-      ?? new Date().toISOString();
-
-    // Extract "to" and "cc" addresses for tag parsing
-    const toRaw = (msg as Record<string, unknown>).to;
-    const ccRaw = (msg as Record<string, unknown>).cc;
-    const toAddresses: string[] = Array.isArray(toRaw)
-      ? toRaw.map(String)
-      : typeof toRaw === "string"
-        ? [toRaw]
-        : [];
-    const ccAddresses: string[] = Array.isArray(ccRaw)
-      ? ccRaw.map(String)
-      : typeof ccRaw === "string"
-        ? [ccRaw]
-        : [];
-    const allAddresses = [...toAddresses, ...ccAddresses];
-    const senderEmail = from.includes("<")
-      ? from.match(/<(.+)>/)?.[1] ?? from
-      : from;
-    const isOwner = senderEmail.toLowerCase() === agent.ownerEmail.toLowerCase();
-    const tag = parseTag(allAddresses, agent.agentEmail);
-
-    log.info(`New email for agent ${agent.agentId}: messageId=${messageId} from=${from} to=${JSON.stringify(toAddresses)} cc=${JSON.stringify(ccAddresses)}`);
-    pendingMessages.push({ messageId, from, timestamp, senderEmail, isOwner, tag });
-  }
-
-  if (pendingMessages.length === 0) return;
-
-  const batchingResult = await routeEmailBatches(temporal, agent, pendingMessages);
-  if (batchingResult.deliveredMessageIds.length === 0) return;
+  const deliveredMessageIds = await deliverMessages(temporal, agent, pending);
+  if (deliveredMessageIds.length === 0) return;
 
   await prisma.processedEmail.createMany({
-    data: batchingResult.deliveredMessageIds.map((messageId) => ({
+    data: deliveredMessageIds.map((messageId) => ({
       messageId,
       inboxId: agent.agentEmail,
     })),
@@ -197,25 +153,99 @@ export async function pollInbox(
   });
 }
 
-export async function routeEmailBatches(
-  temporal: Client,
-  agent: { agentId: string; agentEmail: string; ownerEmail: string },
-  messages: PendingInboundMessage[],
-): Promise<{ deliveredMessageIds: string[] }> {
-  const batchesByKey = new Map<string, SignalBatch>();
-  const deliveredMessageIds: string[] = [];
+/**
+ * Walk the raw agentmail message list, skip anything we've already handled,
+ * and return parsed `PendingInboundMessage`s ready for routing. We filter out:
+ *   - sent messages (label != "received")
+ *   - messages the agent sent to itself (would cause self-wake loops)
+ *   - messages we've already recorded in `processedEmails`
+ */
+async function collectPendingMessages(
+  messages: Record<string, unknown>[],
+  agent: { agentEmail: string; ownerEmail: string },
+): Promise<PendingInboundMessage[]> {
+  const pending: PendingInboundMessage[] = [];
 
   for (const msg of messages) {
-    const route = await resolveSignalBatchRoute(temporal, agent, msg);
+    const labels = msg.labels as string[] | undefined;
+    if (!labels?.includes("received")) continue;
+
+    const messageId = (msg.messageId as string) ?? (msg.message_id as string);
+    if (!messageId) continue;
+
+    const from = (msg.from as string) ?? "";
+    if (isSelfSentEmail(from.toLowerCase(), agent.agentEmail)) continue;
+
+    const existing = await prisma.processedEmail.findUnique({ where: { messageId } });
+    if (existing) continue;
+
+    const timestamp = (msg.timestamp as string)
+      ?? (msg.created_at as string)
+      ?? new Date().toISOString();
+
+    const toAddresses = coerceAddressList(msg.to);
+    const ccAddresses = coerceAddressList(msg.cc);
+
+    // Agentmail returns `from` either as a bare address ("a@b.com") or as a
+    // display-name form ("Name <a@b.com>"). Extract the bare address so we can
+    // reliably compare against `ownerEmail` and use it in wake metadata.
+    const senderEmail = from.includes("<")
+      ? from.match(/<(.+)>/)?.[1] ?? from
+      : from;
+
+    pending.push({
+      messageId,
+      timestamp,
+      senderEmail,
+      isOwner: senderEmail.toLowerCase() === agent.ownerEmail.toLowerCase(),
+      tag: parseTag([...toAddresses, ...ccAddresses], agent.agentEmail),
+    });
+  }
+
+  return pending;
+}
+
+function coerceAddressList(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw === "string") return [raw];
+  return [];
+}
+
+/**
+ * Route pending messages to their target workflows. Owner emails are signalled
+ * individually (one `SIGNAL_OWNER` per message) because the worker's owner-wake
+ * handler needs a concrete messageId to tell the agent which email to read.
+ * Participant emails headed for the same workflow are grouped into a single
+ * `SIGNAL_EMAIL` batch so the agent wakes once per poll cycle.
+ *
+ * Returns the list of messageIds that were successfully delivered (and should
+ * therefore be marked as processed). Messages whose target workflow is stopped
+ * are deferred — they stay unprocessed and will be retried on the next poll.
+ */
+async function deliverMessages(
+  temporal: Client,
+  agent: { agentId: string; agentEmail: string; ownerEmail: string },
+  pending: PendingInboundMessage[],
+): Promise<string[]> {
+  const participantBatches = new Map<string, ParticipantBatch>();
+  const ownerMessages: Array<{ workflowId: string; messageId: string }> = [];
+  const delivered: string[] = [];
+
+  // Phase 1: resolve each message to a target workflow, then bucket it as
+  // either an individual owner signal or a batched participant signal.
+  for (const msg of pending) {
+    const route = await resolveTargetWorkflow(temporal, agent, msg);
     if (!route) continue;
 
-    const key = `${route.workflowId}:${route.signalType}`;
-    const existing = batchesByKey.get(key);
+    if (msg.isOwner) {
+      ownerMessages.push({ workflowId: route.workflowId, messageId: msg.messageId });
+      continue;
+    }
 
+    const existing = participantBatches.get(route.workflowId);
     if (!existing) {
-      batchesByKey.set(key, {
+      participantBatches.set(route.workflowId, {
         workflowId: route.workflowId,
-        signalType: route.signalType,
         tag: route.tag,
         messageIds: [msg.messageId],
         senders: [msg.senderEmail],
@@ -223,7 +253,6 @@ export async function routeEmailBatches(
       });
       continue;
     }
-
     existing.messageIds.push(msg.messageId);
     existing.senders.push(msg.senderEmail);
     if (new Date(msg.timestamp).getTime() > new Date(existing.latestTimestamp).getTime()) {
@@ -231,83 +260,73 @@ export async function routeEmailBatches(
     }
   }
 
-  for (const batch of batchesByKey.values()) {
+  // Phase 2: deliver owner signals one-at-a-time.
+  for (const owner of ownerMessages) {
     try {
-      const handle = temporal.workflow.getHandle(batch.workflowId);
-      if (batch.signalType === "owner") {
-        const payload = `inline:${JSON.stringify({
-          source: "owner",
-          message: `${batch.messageIds.length} owner email(s) received in latest poll batch`,
-          messageIds: batch.messageIds,
-        })}`;
-        log.info(`  → Owner batch signal for ${batch.workflowId} (${batch.messageIds.length} message(s))`);
-        await handle.signal(SIGNAL_OWNER, payload);
-      } else {
-        const inboundEmail: InboundEmail = {
-          messageId: batch.messageIds[0],
-          sender: batch.senders[0],
-          inboxId: agent.agentEmail,
-          timestamp: batch.latestTimestamp,
-          tag: batch.tag,
-          batchMessageIds: batch.messageIds,
-          batchSenders: batch.senders,
-        };
-        log.info(`  → Participant batch signal for ${batch.workflowId} (${batch.messageIds.length} message(s))`);
-        await handle.signal(SIGNAL_EMAIL, inboundEmail);
-      }
-      deliveredMessageIds.push(...batch.messageIds);
+      log.info(`  → Owner signal for ${owner.workflowId} (messageId=${owner.messageId})`);
+      await temporal.workflow.getHandle(owner.workflowId).signal(SIGNAL_OWNER, owner.messageId);
+      delivered.push(owner.messageId);
     } catch (error) {
-      log.error(`  Failed to send batch signal for ${batch.workflowId}:`, error);
+      log.error(`  Failed to send owner signal for ${owner.workflowId}:`, error);
     }
   }
 
-  return { deliveredMessageIds };
+  // Phase 3: deliver participant batches as single `on_email` signals.
+  for (const batch of participantBatches.values()) {
+    try {
+      log.info(`  → Participant batch for ${batch.workflowId} (${batch.messageIds.length} message(s))`);
+      const inboundEmail: InboundEmail = {
+        messageId: batch.messageIds[0],
+        sender: batch.senders[0],
+        inboxId: agent.agentEmail,
+        timestamp: batch.latestTimestamp,
+        tag: batch.tag,
+        batchMessageIds: batch.messageIds,
+        batchSenders: batch.senders,
+      };
+      await temporal.workflow.getHandle(batch.workflowId).signal(SIGNAL_EMAIL, inboundEmail);
+      delivered.push(...batch.messageIds);
+    } catch (error) {
+      log.error(`  Failed to send participant batch for ${batch.workflowId}:`, error);
+    }
+  }
+
+  return delivered;
 }
 
-async function resolveSignalBatchRoute(
+/**
+ * Decide which workflow should receive a given message. Rules:
+ *   - `+tag` that matches a known task → that child task's workflow
+ *   - `+tag` with no matching task (orphan) → root workflow
+ *   - no tag → root workflow
+ * Returns `null` if the chosen workflow isn't running; the gateway will defer
+ * the message (leave it unprocessed) and retry on the next poll.
+ */
+async function resolveTargetWorkflow(
   temporal: Client,
-  agent: { agentId: string; agentEmail: string; ownerEmail: string },
+  agent: { agentId: string; agentEmail: string },
   msg: PendingInboundMessage,
-): Promise<{ workflowId: string; signalType: "email" | "owner"; tag?: string } | null> {
+): Promise<{ workflowId: string; tag?: string } | null> {
+  const rootWorkflowId = `agent__${agent.agentId}__root`;
+
   if (msg.tag && msg.tag !== "root") {
     const task = await prisma.task.findUnique({ where: { tag: msg.tag } });
-
     if (task) {
       const workflowId = `task-${task.taskId}`;
       if (!(await isWorkflowRunning(temporal, workflowId))) {
         log.info(`  → Deferring email for stopped task ${task.taskId} (will retry on restart)`);
         return null;
       }
-      return {
-        workflowId,
-        signalType: msg.isOwner ? "owner" : "email",
-        tag: msg.tag,
-      };
-    }
-
-    const rootWorkflowId = `agent__${agent.agentId}__root`;
-    if (!(await isWorkflowRunning(temporal, rootWorkflowId))) {
-      log.info(`  → Deferring orphan-tag email because root workflow is stopped for agent ${agent.agentId} (will retry on restart)`);
-      return null;
+      return { workflowId, tag: msg.tag };
     }
     log.info(`  → Orphan tag "${msg.tag}", routing to root task for agent ${agent.agentId}`);
-    return {
-      workflowId: rootWorkflowId,
-      signalType: "email",
-      tag: msg.tag,
-    };
   }
 
-  const rootWorkflowId = `agent__${agent.agentId}__root`;
   if (!(await isWorkflowRunning(temporal, rootWorkflowId))) {
-    log.info(`  → Deferring root email because root workflow is stopped for agent ${agent.agentId} (will retry on restart)`);
+    log.info(`  → Deferring email because root workflow is stopped for agent ${agent.agentId} (will retry on restart)`);
     return null;
   }
-
-  return {
-    workflowId: rootWorkflowId,
-    signalType: msg.isOwner ? "owner" : "email",
-  };
+  return { workflowId: rootWorkflowId, tag: msg.tag ?? undefined };
 }
 
 function sleep(ms: number) {
