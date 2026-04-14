@@ -3,6 +3,7 @@ import { AgentMailClient } from "agentmail";
 import fs from "fs";
 import path from "path";
 import type { AgentTool } from "../../pi-types.js";
+import { resolveAuthorizedPath } from "./file-tools.js";
 
 interface AgentMailLike {
   inboxes: {
@@ -11,29 +12,12 @@ interface AgentMailLike {
       reply: (inboxId: string, messageId: string, params: Record<string, unknown>) => Promise<unknown>;
       get: (inboxId: string, messageId: string) => Promise<unknown>;
       list: (inboxId: string, params: Record<string, unknown>) => Promise<unknown>;
+      getAttachment: (inboxId: string, messageId: string, attachmentId: string) => Promise<unknown>;
     };
     threads: {
       list: (inboxId: string, params: Record<string, unknown>) => Promise<unknown>;
     };
   };
-}
-
-let agentmailClient: AgentMailLike | null = null;
-
-function getAgentMailClient(): AgentMailLike {
-  if (!agentmailClient) {
-    agentmailClient = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY! });
-  }
-  return agentmailClient;
-}
-
-export function setAgentMailClientForTests(client: AgentMailLike | null): void {
-  agentmailClient = client;
-}
-
-export function addTag(email: string, tag: string): string {
-  const [local, domain] = email.split("@");
-  return `${local}+${tag}@${domain}`;
 }
 
 type AttachmentInput = {
@@ -42,6 +26,21 @@ type AttachmentInput = {
   contentType?: string;
   contentDisposition?: "attachment" | "inline";
   contentId?: string;
+};
+
+type MessageAttachment = {
+  attachmentId: string;
+  filename?: string;
+  size?: number;
+  contentType?: string;
+  contentDisposition?: string;
+  contentId?: string;
+};
+
+type DownloadAttachmentParams = {
+  messageId: string;
+  attachmentId: string;
+  path?: string;
 };
 
 type SendEmailParams = {
@@ -75,6 +74,14 @@ type OutgoingEmailInput = {
   attachments?: Record<string, unknown>[];
 };
 
+type AttachmentAccess = {
+  access: "none" | "owner" | "blocked";
+  items: MessageAttachment[];
+  senderEmail: string | null;
+};
+
+let agentmailClient: AgentMailLike | null = null;
+
 const attachmentInputSchema = Type.Object({
   path: Type.String({ description: "Relative path to a file in your working directory." }),
   filename: Type.Optional(Type.String({ description: "Optional override for the attachment filename." })),
@@ -85,6 +92,22 @@ const attachmentInputSchema = Type.Object({
   ], { description: "How the attachment should be presented to recipients." })),
   contentId: Type.Optional(Type.String({ description: "Optional content ID for inline HTML references." })),
 });
+
+function getAgentMailClient(): AgentMailLike {
+  if (!agentmailClient) {
+    agentmailClient = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY! });
+  }
+  return agentmailClient;
+}
+
+export function setAgentMailClientForTests(client: AgentMailLike | null): void {
+  agentmailClient = client;
+}
+
+export function addTag(email: string, tag: string): string {
+  const [local, domain] = email.split("@");
+  return `${local}+${tag}@${domain}`;
+}
 
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -109,6 +132,24 @@ function normalizeAddressList(value: string | string[] | undefined): string[] {
     normalized.push(trimmed);
   }
   return normalized;
+}
+
+function normalizeSenderEmail(rawFrom: unknown): string | null {
+  if (typeof rawFrom !== "string") {
+    return null;
+  }
+
+  const trimmed = rawFrom.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const extracted = trimmed.includes("<")
+    ? trimmed.match(/<(.+)>/)?.[1] ?? trimmed
+    : trimmed;
+
+  const normalized = extracted.trim().toLowerCase();
+  return normalized || null;
 }
 
 function isWithinDir(rootDir: string, targetPath: string): boolean {
@@ -233,6 +274,115 @@ function formatAttachmentSummary(attachments?: AttachmentInput[]): string {
   return `${attachments.length} attachment${attachments.length === 1 ? "" : "s"} (${names.join(", ")})`;
 }
 
+function coerceMessageAttachments(rawAttachments: unknown): MessageAttachment[] {
+  if (!Array.isArray(rawAttachments)) {
+    return [];
+  }
+
+  return rawAttachments.flatMap((attachment): MessageAttachment[] => {
+    if (!attachment || typeof attachment !== "object") {
+      return [];
+    }
+
+    const record = attachment as Record<string, unknown>;
+    const attachmentId = normalizeString((record.attachmentId ?? record.attachment_id) as string | undefined);
+    if (!attachmentId) {
+      return [];
+    }
+
+    const sizeValue = record.size;
+    return [{
+      attachmentId,
+      filename: normalizeString((record.filename ?? record.file_name) as string | undefined),
+      size: typeof sizeValue === "number" ? sizeValue : undefined,
+      contentType: normalizeString((record.contentType ?? record.content_type) as string | undefined),
+      contentDisposition: normalizeString((record.contentDisposition ?? record.content_disposition) as string | undefined),
+      contentId: normalizeString((record.contentId ?? record.content_id) as string | undefined),
+    }];
+  });
+}
+
+function getAttachmentAccess(msg: Record<string, unknown>, ownerEmail: string): AttachmentAccess {
+  const items = coerceMessageAttachments(msg.attachments);
+  const senderEmail = normalizeSenderEmail(msg.from);
+  if (items.length === 0) {
+    return { access: "none", items, senderEmail };
+  }
+
+  if (senderEmail && senderEmail === ownerEmail.trim().toLowerCase()) {
+    return { access: "owner", items, senderEmail };
+  }
+
+  return { access: "blocked", items, senderEmail };
+}
+
+function formatAttachmentSection(access: AttachmentAccess): string[] {
+  if (access.access === "none") {
+    return ["Attachments: none"];
+  }
+
+  if (access.access === "blocked") {
+    return [`Attachments: ${access.items.length} blocked (non-owner sender)`];
+  }
+
+  return [
+    `Attachments (${access.items.length}):`,
+    ...access.items.map((attachment) => {
+      const filename = attachment.filename ?? "unnamed";
+      const contentType = attachment.contentType ?? "unknown content type";
+      const size = attachment.size !== undefined ? `${attachment.size} bytes` : "unknown size";
+      return `- ${attachment.attachmentId} | ${filename} | ${contentType} | ${size}`;
+    }),
+  ];
+}
+
+function buildAttachmentDetails(access: AttachmentAccess): Record<string, unknown> {
+  if (access.access === "none") {
+    return { access: "none", count: 0 };
+  }
+
+  if (access.access === "blocked") {
+    return {
+      access: "blocked",
+      count: access.items.length,
+      blockedReason: "non_owner_sender",
+      senderEmail: access.senderEmail,
+    };
+  }
+
+  return {
+    access: "owner",
+    count: access.items.length,
+    items: access.items,
+    senderEmail: access.senderEmail,
+  };
+}
+
+function sanitizeFilename(filename: string): string {
+  const trimmed = filename.trim();
+  const sanitized = trimmed
+    .replace(/[/\\]/g, "_")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/^\.+/, "");
+
+  return sanitized || "attachment";
+}
+
+function buildDefaultAttachmentPath(attachmentId: string, filename?: string): string {
+  return path.join("attachments", `${attachmentId}__${sanitizeFilename(filename ?? "attachment")}`);
+}
+
+function extractDownloadValue<T extends string | number>(
+  record: Record<string, unknown>,
+  camelKey: string,
+  snakeKey: string,
+): T | undefined {
+  const value = (record[camelKey] ?? record[snakeKey]) as T | undefined;
+  return value;
+}
+
 // ============================================================================
 // SEND EMAIL — root sends from base, child auto-CCs its +tag address for routing
 // ============================================================================
@@ -352,7 +502,7 @@ export function createReplyEmailTool(agentEmail: string, agentDir: string, tag?:
 // READ EMAIL (by ID — same for root and child)
 // ============================================================================
 
-export function createReadEmailTool(agentEmail: string): AgentTool {
+export function createReadEmailTool(agentEmail: string, ownerEmail: string): AgentTool {
   const inboxId = agentEmail;
 
   return {
@@ -368,24 +518,136 @@ export function createReadEmailTool(agentEmail: string): AgentTool {
         const agentmail = getAgentMailClient();
         const msg = await agentmail.inboxes.messages.get(inboxId, p.messageId) as Record<string, unknown>;
         const body = (msg.extractedText ?? msg.text ?? "") as string;
+        const attachmentAccess = getAttachmentAccess(msg, ownerEmail);
         const formatted = [
           `From: ${msg.from ?? "unknown"}`,
           `To: ${JSON.stringify(msg.to)}`,
           msg.cc ? `CC: ${JSON.stringify(msg.cc)}` : null,
           `Subject: ${msg.subject ?? "(no subject)"}`,
           `Date: ${msg.createdAt ?? msg.timestamp ?? "unknown"}`,
-          `Thread: ${msg.threadId ?? "none"}`,
-          `Message ID: ${msg.messageId ?? p.messageId}`,
-          ``,
+          `Thread: ${msg.threadId ?? msg.thread_id ?? "none"}`,
+          `Message ID: ${msg.messageId ?? msg.message_id ?? p.messageId}`,
+          ...formatAttachmentSection(attachmentAccess),
+          "",
           body || "(empty body)",
         ].filter(Boolean).join("\n");
         return {
           content: [{ type: "text" as const, text: formatted }],
-          details: { messageId: p.messageId, threadId: msg.threadId },
+          details: {
+            messageId: p.messageId,
+            threadId: msg.threadId ?? msg.thread_id,
+            attachments: buildAttachmentDetails(attachmentAccess),
+          },
         };
       } catch (error) {
         return {
           content: [{ type: "text" as const, text: `Failed to read email: ${error instanceof Error ? error.message : String(error)}` }],
+          details: { error: true },
+        };
+      }
+    },
+  };
+}
+
+// ============================================================================
+// DOWNLOAD EMAIL ATTACHMENT (owner-only)
+// ============================================================================
+
+export function createDownloadEmailAttachmentTool(agentEmail: string, ownerEmail: string, agentDir: string): AgentTool {
+  const inboxId = agentEmail;
+
+  return {
+    name: "download_email_attachment",
+    label: "Download Email Attachment",
+    description:
+      "Download an attachment from an owner-sent email into your workspace. Use this after read_email reveals owner attachment metadata.",
+    parameters: Type.Object({
+      messageId: Type.String({ description: "The message ID that contains the attachment." }),
+      attachmentId: Type.String({ description: "The attachment ID to download." }),
+      path: Type.Optional(Type.String({ description: "Optional workspace-relative destination path. Defaults to attachments/<attachmentId>__<filename>." })),
+    }),
+    execute: async (_toolCallId, params) => {
+      try {
+        const p = params as DownloadAttachmentParams;
+        const agentmail = getAgentMailClient();
+        const msg = await agentmail.inboxes.messages.get(inboxId, p.messageId) as Record<string, unknown>;
+        const attachmentAccess = getAttachmentAccess(msg, ownerEmail);
+
+        if (attachmentAccess.access !== "owner") {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "Attachment download is only allowed for owner-sent emails.",
+            }],
+            details: {
+              error: true,
+              attachments: buildAttachmentDetails(attachmentAccess),
+            },
+          };
+        }
+
+        const messageAttachment = attachmentAccess.items.find((attachment) => attachment.attachmentId === p.attachmentId);
+        if (!messageAttachment) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Attachment ${p.attachmentId} was not found on message ${p.messageId}.`,
+            }],
+            details: { error: true, messageId: p.messageId, attachmentId: p.attachmentId },
+          };
+        }
+
+        const attachmentResponse = await agentmail.inboxes.messages.getAttachment(inboxId, p.messageId, p.attachmentId) as Record<string, unknown>;
+        const downloadUrl = normalizeString(extractDownloadValue<string>(attachmentResponse, "downloadUrl", "download_url"));
+        if (!downloadUrl) {
+          throw new Error("Attachment download URL missing from AgentMail response.");
+        }
+
+        const downloadFilename = normalizeString(extractDownloadValue<string>(attachmentResponse, "filename", "filename"))
+          ?? messageAttachment.filename
+          ?? "attachment";
+        const outputPath = normalizeString(p.path) ?? buildDefaultAttachmentPath(p.attachmentId, downloadFilename);
+        const resolvedPath = resolveAuthorizedPath(agentDir, outputPath, "write");
+        if (!resolvedPath.path) {
+          return {
+            content: [{ type: "text" as const, text: resolvedPath.error ?? "Error: Path traversal not allowed." }],
+            details: { error: true },
+          };
+        }
+
+        const response = await fetch(downloadUrl);
+        if (!response.ok) {
+          throw new Error(`Attachment download failed with status ${response.status}.`);
+        }
+
+        const bytes = Buffer.from(await response.arrayBuffer());
+        fs.mkdirSync(path.dirname(resolvedPath.path), { recursive: true });
+        fs.writeFileSync(resolvedPath.path, bytes);
+
+        const contentType = normalizeString(extractDownloadValue<string>(attachmentResponse, "contentType", "content_type"))
+          ?? messageAttachment.contentType
+          ?? null;
+
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Attachment downloaded successfully: ${downloadFilename} saved to ${outputPath} (${bytes.length} bytes${contentType ? `; ${contentType}` : ""}).`,
+          }],
+          details: {
+            messageId: p.messageId,
+            attachmentId: p.attachmentId,
+            path: outputPath,
+            filename: downloadFilename,
+            contentType,
+            size: bytes.length,
+          },
+        };
+      } catch (error) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Failed to download attachment: ${error instanceof Error ? error.message : String(error)}`,
+          }],
           details: { error: true },
         };
       }
@@ -450,7 +712,6 @@ export function createFilteredReadEmailsTool(agentEmail: string, tag: string): A
       try {
         const p = params as { limit?: number };
         const agentmail = getAgentMailClient();
-        // Fetch threads and find ones that involve our +tag address
         const threadResponse = await agentmail.inboxes.threads.list(inboxId, { limit: 50 }) as Record<string, unknown>;
         const threads = (threadResponse.threads ?? threadResponse.data ?? []) as Record<string, unknown>[];
 
@@ -464,7 +725,6 @@ export function createFilteredReadEmailsTool(agentEmail: string, tag: string): A
           }
         }
 
-        // Fetch messages and filter to our threads
         const msgResponse = await agentmail.inboxes.messages.list(inboxId, { limit: 50 }) as Record<string, unknown>;
         const allMessages = (msgResponse.messages ?? msgResponse.data ?? []) as Record<string, unknown>[];
         const filtered = allMessages

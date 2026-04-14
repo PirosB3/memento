@@ -16,6 +16,7 @@ import {
   createSendEmailTool,
   createReplyEmailTool,
   createReadEmailTool,
+  createDownloadEmailAttachmentTool,
   createReadEmailsTool,
   createFilteredReadEmailsTool,
   createListThreadsTool,
@@ -104,7 +105,8 @@ export async function runPiAgentTurnImpl(
         // Root: unfiltered email tools, base address
         createSendEmailTool(agent.agentEmail, agentDir),
         createReplyEmailTool(agent.agentEmail, agentDir),
-        createReadEmailTool(agent.agentEmail),
+        createReadEmailTool(agent.agentEmail, agent.ownerEmail),
+        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
         createReadEmailsTool(agent.agentEmail),
         createListThreadsTool(agent.agentEmail),
         // Root: task management tools
@@ -128,7 +130,8 @@ export async function runPiAgentTurnImpl(
         // Child: filtered email tools, +tag address
         createSendEmailTool(agent.agentEmail, agentDir, task.tag),
         createReplyEmailTool(agent.agentEmail, agentDir, task.tag),
-        createReadEmailTool(agent.agentEmail),
+        createReadEmailTool(agent.agentEmail, agent.ownerEmail),
+        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
         createFilteredReadEmailsTool(agent.agentEmail, task.tag),
         createFilteredListThreadsTool(agent.agentEmail, task.tag),
         // Schedule tools

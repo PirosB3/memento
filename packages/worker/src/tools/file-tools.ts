@@ -35,7 +35,7 @@ function getSharedRoot(agentDir: string): string | null {
   }
 }
 
-function resolveAuthorizedPath(
+export function resolveAuthorizedPath(
   agentDir: string,
   requestedPath: string,
   mode: "read" | "write",
