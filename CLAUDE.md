@@ -268,6 +268,10 @@ POST   /api/agents/[id]/tasks/prepare — Generate clarifying questions for task
 - Schedule timer: `schedule-{scheduleId}`
 - Task queue: `summon-agents`
 
+## Test Data Rules
+
+**Never use real or real-looking email domains in tests, fixtures, or examples.** Only use RFC 2606 / RFC 6761 reserved domains: `example.com`, `example.org`, `example.net`, or `*.example`, `*.test`, `*.invalid`, `*.localhost`. These are guaranteed to never resolve to a real inbox. Using anything else — even a domain that "looks fake" — risks leaking a real address into committed code, test snapshots, or log output. If you encounter non-reserved domains in existing test data, replace them.
+
 ## Important Implementation Notes
 
 1. **Activity timeout**: `startToCloseTimeout: "10m"` — Pi agent turns can take a while with many tool calls. Was originally 5m, caused timeouts.
