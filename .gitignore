@@ -21,3 +21,8 @@ test/helpers/factories.js
 test/helpers/factories.js.map
 test/helpers/factories.d.ts
 test/helpers/factories.d.ts.map
+X_ESSAY.md
+codex-essay.md
+memento-article.md
+instructions/convo.txt
+llms/
