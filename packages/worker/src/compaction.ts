@@ -5,7 +5,7 @@
  *   1. Estimate token count of active conversation messages (chars/4 heuristic).
  *   2. When above threshold, compact via:
  *      a) OpenAI's /codex/responses/compact endpoint (if available on the ChatGPT backend), OR
- *      b) DIY summarization via a cheaper model (gpt-5.1-codex-mini) as a fallback.
+ *      b) DIY summarization via gpt-5.4 as a fallback.
  *   3. Persist the result on the Task row so subsequent turns inject it as a prefix.
  *
  * The OpenAI compact endpoint returns *opaque* compaction items that can only be passed
@@ -258,14 +258,14 @@ async function tryCodexCompactEndpoint(args: {
 }
 
 /**
- * DIY summarization fallback using a cheap model (gpt-5.1-codex-mini).
+ * DIY summarization fallback using gpt-5.4.
  */
-async function summarizeViaCheapModel(args: {
+async function summarizeViaFallbackModel(args: {
   activeMessages: AgentMessage[];
   previousSummary: string | null;
   credentials: CodexCredentials;
 }): Promise<string> {
-  const summarizerModel = getModel("openai-codex" as never, "gpt-5.1-codex-mini" as never) as unknown as {
+  const summarizerModel = getModel("openai-codex" as never, "gpt-5.4" as never) as unknown as {
     id: string;
     api: string;
     provider: string;
@@ -385,9 +385,9 @@ export async function compactTaskContext(args: CompactTaskContextArgs): Promise<
     taskLog.warn(`/codex/responses/compact errored, falling back to DIY: ${msg}`);
   }
 
-  // Attempt B: DIY summarization via gpt-5.1-codex-mini
+  // Attempt B: DIY summarization via gpt-5.4
   try {
-    const summary = await summarizeViaCheapModel({
+    const summary = await summarizeViaFallbackModel({
       activeMessages: args.activeMessages,
       previousSummary: args.existingCompactedSummary,
       credentials: args.credentials,

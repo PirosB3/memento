@@ -185,20 +185,13 @@ function createFakeMailGateway(): MailGateway {
   };
 }
 
-function mapAnthropicModelToCodex(model: string): string {
-  // Map legacy Anthropic model names to ChatGPT subscription equivalents.
-  // Heavyweight prompts (agent generation) get gpt-5.4; everything else uses the cheap mini.
-  if (model.includes("opus")) return "gpt-5.4";
-  return "gpt-5.1-codex-mini";
-}
-
 function createRealLlmGateway(): LlmGateway {
   return {
     async createText({ model, maxTokens, system, prompt }) {
       const { completeSimple, getModel } = await loadPiAiModule();
       const creds = await loadCodexCredentials();
-      const codexModelId = mapAnthropicModelToCodex(model);
-      const codexModel = getModel("openai-codex" as never, codexModelId as never) as never;
+      void model;
+      const codexModel = getModel("openai-codex" as never, "gpt-5.4" as never) as never;
 
       const response = await completeSimple(
         codexModel,
