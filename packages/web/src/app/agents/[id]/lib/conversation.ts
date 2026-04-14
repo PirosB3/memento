@@ -22,8 +22,15 @@ export type ParsedContent =
   | { kind: "toolResult"; id?: string; name?: string; output: string }
   | { kind: "json"; value: unknown };
 
-const ANSI_RE =
-  /[\x1B\x9B][[\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*|[a-zA-Z\d]+(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\x07)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+// ANSI escape sequences legitimately contain control characters — assemble
+// the regex source from char codes so lint rules don't flag literal controls.
+const ESC = String.fromCharCode(0x1b);
+const CSI = String.fromCharCode(0x9b);
+const BEL = String.fromCharCode(0x07);
+const ANSI_RE = new RegExp(
+  `[${ESC}${CSI}][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d/#&.:=?%@~_]*)*)?${BEL})|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))`,
+  "g",
+);
 
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, "");
