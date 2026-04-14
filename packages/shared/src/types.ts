@@ -75,6 +75,8 @@ export interface InboundEmail {
   inboxId: string;
   timestamp: string;
   tag?: string;
+  batchMessageIds?: string[];
+  batchSenders?: string[];
 }
 
 export interface DecisionResult {

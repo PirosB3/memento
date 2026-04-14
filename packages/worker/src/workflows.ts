@@ -8,6 +8,7 @@ import {
 } from "@temporalio/workflow";
 import type {
   DecisionResult,
+  InboundEmail,
   ScheduleWorkflowRuntimeSnapshot,
   TaskStatus,
   TaskWorkflowPhase,
@@ -76,14 +77,6 @@ const {
     maximumAttempts: 50,
   },
 });
-
-interface InboundEmail {
-  messageId: string;
-  sender: string;
-  inboxId: string;
-  timestamp: string;
-  tag?: string;
-}
 
 interface ScheduleEvent {
   scheduleId: string;
@@ -615,15 +608,17 @@ async function activeLoop(
       };
     } else if (emailQueue.length > 0) {
       const emails = emailQueue.splice(0);
+      const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
+      const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
       wake = {
         trigger: "email",
         wokenBy: "email",
-        triggerContext: `Received ${emails.length} email(s) from: ${emails.map((email) => email.sender).join(", ")}`,
+        triggerContext: `Received ${allMessageIds.length} email(s) from: ${allSenders.join(", ")}`,
         metadata: [
-          { label: "MESSAGE_IDS", value: emails.map((email) => email.messageId).join(", ") },
-          { label: "SENDERS", value: emails.map((email) => email.sender).join(", ") },
+          { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
+          { label: "SENDERS", value: allSenders.join(", ") },
         ],
-        actionNow: `Use read_email to inspect the new email(s), starting with messageId "${emails[0].messageId}".`,
+        actionNow: "Use read_emails or list_threads to pull the full batch and respond holistically.",
       };
     } else {
       wake = {
@@ -779,15 +774,17 @@ async function dormantLoop(
       };
     } else {
       const emails = emailQueue.splice(0);
+      const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
+      const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
       wake = {
         trigger: "email",
         wokenBy: "email",
-        triggerContext: `Received ${emails.length} email(s) to completed task. Reanimating.`,
+        triggerContext: `Received ${allMessageIds.length} email(s) to completed task. Reanimating.`,
         metadata: [
-          { label: "MESSAGE_IDS", value: emails.map((email) => email.messageId).join(", ") },
-          { label: "SENDERS", value: emails.map((email) => email.sender).join(", ") },
+          { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
+          { label: "SENDERS", value: allSenders.join(", ") },
         ],
-        actionNow: `Use read_email to inspect the new email(s), starting with messageId "${emails[0].messageId}", and decide whether to resume the task.`,
+        actionNow: "Use read_emails or list_threads to inspect the new batch and decide whether to resume the task.",
       };
     }
 
