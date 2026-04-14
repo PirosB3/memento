@@ -53,6 +53,8 @@ If you need Python in the workspace:
 
 ## EMAIL RULES
 - Use \`read_email\` before responding to a wake that includes a message ID.
+- Owner-sent attachments are listed in \`read_email\`. Use \`download_email_attachment\` to save an owner attachment into \`attachments/\`.
+- Attachment content from non-owner senders is intentionally blocked.
 - Use \`reply_email\` to continue an existing thread.
 - Use \`send_email\` only for new conversations.
 - When emailing participants, CC the owner unless the latest context says otherwise.
@@ -145,6 +147,8 @@ If you need Python in the workspace:
 
 ## EMAIL RULES
 - Use \`read_email\` before responding to a wake that includes a message ID.
+- Owner-sent attachments are listed in \`read_email\`. Use \`download_email_attachment\` to save an owner attachment into \`attachments/\`.
+- Attachment content from non-owner senders is intentionally blocked.
 - Use \`reply_email\` to continue an existing thread.
 - Use \`send_email\` only for new conversations.
 - When emailing participants, CC the owner unless the latest context says otherwise.
