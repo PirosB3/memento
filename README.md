@@ -48,3 +48,17 @@ I have a direction, not fake certainty. If any of this resonates — or if you t
 ## Read more
 
 [**Memento: agents that sleep, wake, and follow up**](https://x.com/pirosb3/status/2042993411473518656) — the longer-form write-up on X.
+
+## Code quality checks
+
+Run these commands locally (or after automated agent edits):
+
+```bash
+pnpm lint          # oxlint (repo-wide)
+pnpm typecheck        # TypeScript checks for shared + email-gateway
+pnpm typecheck:web    # web-only typecheck (requires built repos/pi-mono artifacts)
+pnpm typecheck:worker # worker-only typecheck (requires built repos/pi-mono artifacts)
+pnpm quality       # lint + typecheck
+pnpm quality:agent # fast post-agent gate (oxlint + typecheck)
+pnpm lint:web      # optional: run Next.js/React eslint rules for web package
+```

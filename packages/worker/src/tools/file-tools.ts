@@ -87,7 +87,7 @@ export function createReadFileTool(agentDir: string): AgentTool {
           content: [{ type: "text" as const, text: content }],
           details: { path: p.path, size: content.length },
         };
-      } catch (error) {
+      } catch {
         return {
           content: [
             {

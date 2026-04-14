@@ -1,0 +1,8 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+repos/pi-mono/
+packages/worker/agents/
