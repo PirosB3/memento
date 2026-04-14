@@ -11,18 +11,20 @@ interface TaskRestartRouteContext {
 }
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: TaskRestartRouteContext,
 ) {
   const { id, taskId } = await params;
+  const body = await request.json().catch(() => null) as { message?: string } | null;
+  const ownerMessage = body?.message?.trim() || undefined;
 
   try {
-    await restartTask(id, taskId);
-    log.info(`Task restarted: ${taskId}`);
+    await restartTask(id, taskId, ownerMessage);
+    log.info(`Task restarted${ownerMessage ? " with owner message" : ""}: ${taskId}`);
     return Response.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to restart task";
-    const status = message === "Task not found" ? 404 : 400;
-    return Response.json({ error: message }, { status });
+    const detail = error instanceof Error ? error.message : "Failed to restart task";
+    const status = detail === "Task not found" ? 404 : 400;
+    return Response.json({ error: detail }, { status });
   }
 }

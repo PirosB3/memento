@@ -253,12 +253,15 @@ POST   /api/agents                    — Create agent + root task + start root 
 GET    /api/agents                    — List agents with task counts
 GET    /api/agents/[id]               — Agent detail with all tasks
 PUT    /api/agents/[id]               — Update soul/boundaries/tools
-POST   /api/agents/[id]/restart       — Restart the agent's root + child workflows
-POST   /api/agents/prepare            — Generate clarifying questions for agent creation
-POST   /api/agents/generate           — Generate SOUL/BOUNDARIES/TOOLS/NAME from Q&A
-GET    /api/agents/[id]/tasks         — List child tasks
-POST   /api/agents/[id]/tasks         — Create child task + start workflow directly
-POST   /api/agents/[id]/tasks/prepare — Generate clarifying questions for task creation
+POST   /api/agents/[id]/restart                         — Restart the agent's root + child workflows
+POST   /api/agents/prepare                              — Generate clarifying questions for agent creation
+POST   /api/agents/generate                             — Generate SOUL/BOUNDARIES/TOOLS/NAME from Q&A
+GET    /api/agents/[id]/tasks                           — List child tasks
+POST   /api/agents/[id]/tasks                           — Create child task + start workflow directly
+POST   /api/agents/[id]/tasks/prepare                   — Generate clarifying questions for task creation
+DELETE /api/agents/[id]/tasks/[taskId]                  — Stop a child task workflow
+POST   /api/agents/[id]/tasks/[taskId]/restart          — Restart a child task. Body optional: {"message": "…"} makes it atomic (stop + insert owner message into conversation + start). Without a body, requires the workflow to already be stopped.
+POST   /api/agents/[id]/tasks/[taskId]/wake             — Insert owner message + signal an already-sleeping child (NOT for restart — see note 8)
 ```
 
 ## Workflow IDs
@@ -281,3 +284,4 @@ POST   /api/agents/[id]/tasks/prepare — Generate clarifying questions for task
 5. **Self-send prevention**: Gateway skips emails where `from` contains the agent's own address prefix. This prevents CC-to-self from creating infinite wake loops.
 6. **Task creation from UI**: Child tasks are started via Temporal client directly (`temporal.workflow.start`), NOT by signaling the root task. Root discovers new tasks via `list_tasks()`.
 7. **Task clarifying questions**: Both agent creation and task creation have a "prepare" step that generates 3-5 clarifying questions via Claude (Sonnet for speed). Answers are appended to the objective.
+8. **Use `POST /tasks/[taskId]/restart` with a `message` body to retry after a code fix**: When the worker has been redeployed with a bug fix and you want a child task to retry the failing action, hit `POST /api/agents/[id]/tasks/[taskId]/restart` with `{"message": "please retry X"}`. The endpoint atomically stops the workflow, inserts the owner message into the conversation, and starts a new execution — guaranteeing the message is picked up in the first turn of the new run. Do NOT chain `DELETE /tasks/[taskId]` + `POST /restart` (no body) + `POST /wake`: the restart triggers turn 1 before the wake signal can arrive, producing two turns and often duplicate side effects (e.g. duplicate outbound emails — we have hit this in production). The `/wake` endpoint is only safe for nudging an *already sleeping* task that is not being restarted. Both paths are operator-only and intentionally not exposed as agent tools.

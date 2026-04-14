@@ -148,8 +148,27 @@ export async function stopTask(
 export async function restartTask(
   agentId: string,
   taskId: string,
+  message?: string,
   deps: WebServiceDependencies = getWebServiceDependencies(),
 ): Promise<void> {
+  const trimmedMessage = message?.trim();
+
+  if (!trimmedMessage) {
+    await restartTaskWorkflow(agentId, taskId, deps);
+    return;
+  }
+
+  // Atomic restart-with-message: stop → insert owner message → restart.
+  // Inserting the message into the conversation BEFORE startTaskWorkflow
+  // means the new run's turn 1 picks it up via preparePromptMessages. If we
+  // signalled SIGNAL_OWNER instead, the signal would race turn 1 and produce
+  // a second turn — duplicate side effects (see CLAUDE.md note).
+  await stopTaskWorkflow(agentId, taskId, deps);
+  await insertImmediateWakeMessage(
+    taskId,
+    buildDirectOwnerWakeMessage(trimmedMessage),
+    deps,
+  );
   await restartTaskWorkflow(agentId, taskId, deps);
 }
 
