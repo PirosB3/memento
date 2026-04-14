@@ -109,6 +109,27 @@ export function addTag(email: string, tag: string): string {
   return `${local}+${tag}@${domain}`;
 }
 
+function extractEmailAddress(addr: string): string {
+  // AgentMail returns addresses as either "user@domain" or "Display Name <user@domain>".
+  const trimmed = addr.trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/<([^>]+)>/);
+  return (match?.[1] ?? trimmed).trim().toLowerCase();
+}
+
+function createSelfAddressMatcher(agentEmail: string): (addr: string) => boolean {
+  const [local, domain] = agentEmail.toLowerCase().split("@");
+  const base = `${local}@${domain}`;
+  const taggedPrefix = `${local}+`;
+  const taggedSuffix = `@${domain}`;
+  return (addr: string) => {
+    const email = extractEmailAddress(addr);
+    if (!email) return false;
+    if (email === base) return true;
+    return email.startsWith(taggedPrefix) && email.endsWith(taggedSuffix);
+  };
+}
+
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -448,6 +469,7 @@ export function createSendEmailTool(agentEmail: string, agentDir: string, tag?: 
 export function createReplyEmailTool(agentEmail: string, agentDir: string, tag?: string): AgentTool {
   const inboxId = agentEmail;
   const taggedEmail = tag ? addTag(agentEmail, tag) : null;
+  const isSelfAddress = createSelfAddressMatcher(agentEmail);
 
   return {
     name: "reply_email",
@@ -467,7 +489,50 @@ export function createReplyEmailTool(agentEmail: string, agentDir: string, tag?:
       try {
         const p = params as ReplyEmailParams;
         const agentmail = getAgentMailClient();
-        const replyParams = buildEmailPayload(p, { mode: "reply", agentDir, taggedEmail });
+
+        let replyParams: OutgoingEmailInput;
+
+        if (p.replyAll && taggedEmail) {
+          // AgentMail rejects replyAll + explicit cc, but child tasks must inject
+          // their +tag into cc for routing. Construct reply-all recipients manually
+          // and call reply() without the replyAll flag. Threading is preserved
+          // because messageId still drives In-Reply-To/References.
+          let original: Record<string, unknown>;
+          try {
+            original = await agentmail.inboxes.messages.get(inboxId, p.messageId) as Record<string, unknown>;
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            throw new Error(`could not fetch original message for reply-all: ${reason}`);
+          }
+
+          const origFrom = typeof original.from === "string" ? original.from : "";
+          const origTo = Array.isArray(original.to) ? (original.to as string[]) : [];
+          const origCc = Array.isArray(original.cc) ? (original.cc as string[]) : [];
+
+          let toList = normalizeAddressList([origFrom]).filter((a) => !isSelfAddress(a));
+          let ccPool = normalizeAddressList([...origTo, ...origCc]).filter((a) => !isSelfAddress(a));
+
+          if (toList.length === 0 && ccPool.length > 0) {
+            toList = [ccPool[0]];
+            ccPool = ccPool.slice(1);
+          }
+
+          const toKeys = new Set(toList.map((a) => extractEmailAddress(a)));
+          const mergedCc = [
+            ...ccPool.filter((a) => !toKeys.has(extractEmailAddress(a))),
+            ...normalizeAddressList(p.cc).filter((a) => !isSelfAddress(a) && !toKeys.has(extractEmailAddress(a))),
+            taggedEmail,
+          ];
+
+          replyParams = buildEmailPayload(
+            { ...p, replyAll: false, cc: mergedCc },
+            { mode: "reply", agentDir, taggedEmail: null },
+          );
+          replyParams.to = toList;
+        } else {
+          replyParams = buildEmailPayload(p, { mode: "reply", agentDir, taggedEmail });
+        }
+
         const result = await agentmail.inboxes.messages.reply(inboxId, p.messageId, replyParams) as Record<string, unknown>;
         const ccList = normalizeAddressList(replyParams.cc as string[] | undefined);
         const bccList = normalizeAddressList(replyParams.bcc as string[] | undefined);
