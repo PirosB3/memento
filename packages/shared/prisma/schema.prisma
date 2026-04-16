@@ -111,3 +111,14 @@ model ProcessedEmail {
 
   @@map("processed_emails")
 }
+
+model EmailContact {
+  id           Int      @id @default(autoincrement())
+  inboxId      String   @map("inbox_id")
+  emailAddress String   @map("email_address")
+  firstSeenAt  DateTime @default(now()) @map("first_seen_at")
+
+  @@unique([inboxId, emailAddress])
+  @@index([inboxId, emailAddress])
+  @@map("email_contacts")
+}

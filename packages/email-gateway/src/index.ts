@@ -118,6 +118,54 @@ export function isSelfSentEmail(fromField: string, agentEmail: string): boolean 
 }
 
 /**
+ * AgentMail returns addresses as either bare ("a@b.com") or display-name form
+ * ("Name <a@b.com>"). Extract the bare address, lowercase it, and strip any
+ * surrounding whitespace. Returns "" for empty/undefined input.
+ */
+export function extractBareAddress(raw: string | undefined | null): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const match = trimmed.match(/<([^>]+)>/);
+  return (match?.[1] ?? trimmed).trim().toLowerCase();
+}
+
+/**
+ * For a message the agent itself sent (labels include "sent" OR from matches
+ * self), extract every `to`/`cc` recipient that isn't the agent itself and
+ * isn't a `+tag` routing address, and add the normalized form to `out`.
+ *
+ * These recipients are the "emails I replied to" set — the only addresses the
+ * spam post-filter considers trustworthy.
+ */
+export function collectOutboundRecipients(
+  msg: Record<string, unknown>,
+  agentEmail: string,
+  out: Set<string>,
+): void {
+  const labels = (msg.labels as string[] | undefined) ?? [];
+  const from = (msg.from as string) ?? "";
+  const isOutbound = labels.includes("sent") || isSelfSentEmail(from, agentEmail);
+  if (!isOutbound) return;
+
+  const agentEmailLc = agentEmail.toLowerCase();
+  const [local, domain] = agentEmailLc.split("@");
+  const taggedPrefix = `${local}+`;
+  const taggedSuffix = `@${domain}`;
+
+  const to = coerceAddressList(msg.to);
+  const cc = coerceAddressList(msg.cc);
+
+  for (const raw of [...to, ...cc]) {
+    const email = extractBareAddress(raw);
+    if (!email) continue;
+    if (email === agentEmailLc) continue;
+    if (email.startsWith(taggedPrefix) && email.endsWith(taggedSuffix)) continue;
+    out.add(email);
+  }
+}
+
+/**
  * Poll an agent's inbox for new messages and dispatch them to the right
  * Temporal workflow. Participant emails destined for the same workflow are
  * batched into a single `on_email` signal so the agent wakes once per poll
@@ -131,10 +179,28 @@ export async function pollInbox(
 ) {
   const response = await agentmail.inboxes.messages.list(agent.agentEmail, {
     limit: 20,
+    includeSpam: true,
   }) as unknown as Record<string, unknown>;
 
   const messages = (response.messages ?? response.data ?? response) as Record<string, unknown>[];
   if (!Array.isArray(messages) || messages.length === 0) return;
+
+  // Upsert contacts BEFORE running the spam filter in collectPendingMessages, so
+  // any outbound recipients in this same poll cycle are considered "known"
+  // when evaluating spam-labeled replies that showed up alongside them.
+  const outboundRecipients = new Set<string>();
+  for (const msg of messages) {
+    collectOutboundRecipients(msg, agent.agentEmail, outboundRecipients);
+  }
+  if (outboundRecipients.size > 0) {
+    await prisma.emailContact.createMany({
+      data: [...outboundRecipients].map((emailAddress) => ({
+        inboxId: agent.agentEmail,
+        emailAddress,
+      })),
+      skipDuplicates: true,
+    });
+  }
 
   const pending = await collectPendingMessages(messages, agent);
   if (pending.length === 0) return;
@@ -162,13 +228,13 @@ export async function pollInbox(
  */
 async function collectPendingMessages(
   messages: Record<string, unknown>[],
-  agent: { agentEmail: string; ownerEmail: string },
+  agent: { agentId: string; agentEmail: string; ownerEmail: string },
 ): Promise<PendingInboundMessage[]> {
   const pending: PendingInboundMessage[] = [];
 
   for (const msg of messages) {
-    const labels = msg.labels as string[] | undefined;
-    if (!labels?.includes("received")) continue;
+    const labels = (msg.labels as string[] | undefined) ?? [];
+    if (!labels.includes("received")) continue;
 
     const messageId = (msg.messageId as string) ?? (msg.message_id as string);
     if (!messageId) continue;
@@ -186,18 +252,26 @@ async function collectPendingMessages(
     const toAddresses = coerceAddressList(msg.to);
     const ccAddresses = coerceAddressList(msg.cc);
 
-    // Agentmail returns `from` either as a bare address ("a@b.com") or as a
-    // display-name form ("Name <a@b.com>"). Extract the bare address so we can
-    // reliably compare against `ownerEmail` and use it in wake metadata.
-    const senderEmail = from.includes("<")
-      ? from.match(/<(.+)>/)?.[1] ?? from
-      : from;
+    const senderEmail = extractBareAddress(from);
+
+    // Spam post-filter: AgentMail list now returns spam-labeled messages
+    // (includeSpam: true in pollInbox). Only deliver spam from senders we've
+    // previously sent mail to — the "emails I replied to" set. Cold-outreach
+    // spam from addresses we've never engaged with is dropped.
+    if (labels.includes("spam")) {
+      const senderKnown = await isKnownContact(agent.agentEmail, senderEmail);
+      if (!senderKnown) {
+        log.info(`  [${agent.agentId}] Dropping spam-labeled message from unknown sender ${senderEmail} (messageId=${messageId})`);
+        continue;
+      }
+      log.info(`  [${agent.agentId}] Accepting spam-labeled message from known contact ${senderEmail} (messageId=${messageId})`);
+    }
 
     pending.push({
       messageId,
       timestamp,
       senderEmail,
-      isOwner: senderEmail.toLowerCase() === agent.ownerEmail.toLowerCase(),
+      isOwner: senderEmail === agent.ownerEmail.toLowerCase(),
       tag: parseTag([...toAddresses, ...ccAddresses], agent.agentEmail),
     });
   }
@@ -327,6 +401,26 @@ async function resolveTargetWorkflow(
     return null;
   }
   return { workflowId: rootWorkflowId, tag: msg.tag ?? undefined };
+}
+
+/**
+ * Known contacts are addresses this inbox has previously sent an email to.
+ * Populated by `pollInbox` (live) and `backfill-contacts` (one-shot) from the
+ * to/cc of sent-labeled messages. Used by the spam post-filter in
+ * `collectPendingMessages` to rescue misclassified replies from people we're
+ * already in conversation with while still dropping cold spam.
+ */
+export async function isKnownContact(
+  inboxId: string,
+  emailAddress: string,
+): Promise<boolean> {
+  const normalized = emailAddress.trim().toLowerCase();
+  if (!normalized) return false;
+  const match = await prisma.emailContact.findFirst({
+    where: { inboxId, emailAddress: normalized },
+    select: { id: true },
+  });
+  return match !== null;
 }
 
 function sleep(ms: number) {
