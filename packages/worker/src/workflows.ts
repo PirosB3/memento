@@ -55,6 +55,13 @@ interface Activities {
     lastStopReason: string | null,
   ): Promise<string>;
   runPiAgentTurn(taskId: string, turnLogId: number): Promise<DecisionResult>;
+  emailOwnerOnTerminalDecision(input: {
+    taskId: string;
+    kind: "fail" | "escalate";
+    stopReason: string;
+    error?: string;
+    escalationQuestion?: string;
+  }): Promise<{ messageId: string | null; skipped: boolean }>;
 }
 
 const {
@@ -68,6 +75,7 @@ const {
   preparePromptMessages,
   runReflection,
   runPiAgentTurn,
+  emailOwnerOnTerminalDecision,
 } = proxyActivities<Activities>({
   startToCloseTimeout: "10m",
   retry: {
@@ -641,11 +649,27 @@ async function activeLoop(
     currentState = "RUNNING";
 
     if (!isRoot && (decision.type === "complete" || decision.type === "fail")) {
+      if (decision.type === "fail") {
+        await emailOwnerOnTerminalDecision({
+          taskId,
+          kind: "fail",
+          stopReason: decision.stopReason,
+          error: decision.error,
+        });
+      }
       await runtime.setCompletedState();
       return;
     }
 
     if (decision.type === "escalate") {
+      if (!isRoot) {
+        await emailOwnerOnTerminalDecision({
+          taskId,
+          kind: "escalate",
+          stopReason: decision.stopReason,
+          escalationQuestion: decision.escalationQuestion,
+        });
+      }
       await runtime.setEscalatedState();
       currentState = "ESCALATED";
 
@@ -693,6 +717,14 @@ async function activeLoop(
       });
 
       if (!isRoot && (decision.type === "complete" || decision.type === "fail")) {
+        if (decision.type === "fail") {
+          await emailOwnerOnTerminalDecision({
+            taskId,
+            kind: "fail",
+            stopReason: decision.stopReason,
+            error: decision.error,
+          });
+        }
         await runtime.setCompletedState();
         return;
       }

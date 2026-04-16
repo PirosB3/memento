@@ -116,4 +116,56 @@ describe("decide tool", () => {
     expect(result.details).toMatchObject({ autoDeferred: true, type: "defer" });
     expect(captured?.type).toBe("defer");
   });
+
+  it("fail decision records type=fail with error, no TODO check required", async () => {
+    let captured: DecisionResult | null = null;
+    const tool = createDecideTool((decision) => {
+      captured = decision;
+    });
+
+    const result = await tool.execute("call-fail", {
+      type: "fail",
+      stopReason: "Required API is permanently decommissioned.",
+      error: "Vendor API returned 410 Gone for all requests.",
+    });
+
+    expect(getText(result)).toContain("Decision recorded: fail");
+    expect(captured?.type).toBe("fail");
+    expect(captured?.error).toBe("Vendor API returned 410 Gone for all requests.");
+    expect(captured?.stopReason).toBe("Required API is permanently decommissioned.");
+  });
+
+  it("escalate decision records type=escalate with escalationQuestion", async () => {
+    let captured: DecisionResult | null = null;
+    const tool = createDecideTool((decision) => {
+      captured = decision;
+    });
+
+    const result = await tool.execute("call-escalate", {
+      type: "escalate",
+      stopReason: "Cannot complete booking without a passenger name.",
+      escalationQuestion: "What name should I put on the reservation?",
+    });
+
+    expect(getText(result)).toContain("Decision recorded: escalate");
+    expect(captured?.type).toBe("escalate");
+    expect(captured?.escalationQuestion).toBe("What name should I put on the reservation?");
+  });
+
+  it("root cannot call fail — receives error response and no decision emitted", async () => {
+    let captured: DecisionResult | null = null;
+    const tool = createDecideTool((decision) => {
+      captured = decision;
+    }, { isRoot: true });
+
+    const result = await tool.execute("call-root-fail", {
+      type: "fail",
+      stopReason: "Trying to fail as root.",
+      error: "This should not work.",
+    });
+
+    expect(getText(result)).toContain("cannot complete or fail");
+    expect(result.details).toEqual({ error: true });
+    expect(captured).toBeNull();
+  });
 });

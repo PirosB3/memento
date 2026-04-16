@@ -20,6 +20,7 @@ import {
   buildMissingTodoNotice,
   readTodoSnapshot,
 } from "./todo.js";
+import { sendOwnerNotification } from "./tools/agentmail-tools.js";
 
 let temporalClient: Client | null = null;
 async function getTemporalClient(): Promise<Client> {
@@ -49,6 +50,7 @@ export interface Activities {
   preparePromptMessages: typeof preparePromptMessages;
   runReflection: typeof runReflection;
   runPiAgentTurn: typeof runPiAgentTurn;
+  emailOwnerOnTerminalDecision: typeof emailOwnerOnTerminalDecision;
 }
 
 export interface PreparePromptMessagesInput {
@@ -490,4 +492,70 @@ export async function runPiAgentTurn(
     log.error(`Pi agent turn failed: task=${taskId}`, err);
     throw err;
   }
+}
+
+// --- Owner notification on terminal child decisions ---
+
+export interface EmailOwnerOnTerminalDecisionInput {
+  taskId: string;
+  kind: "fail" | "escalate";
+  stopReason: string;
+  error?: string;
+  escalationQuestion?: string;
+}
+
+export async function emailOwnerOnTerminalDecision(
+  input: EmailOwnerOnTerminalDecisionInput,
+): Promise<{ messageId: string | null; skipped: boolean }> {
+  const { taskId, kind, stopReason, error, escalationQuestion } = input;
+  log.info(`emailOwnerOnTerminalDecision: task=${taskId} kind=${kind}`);
+
+  const task = await prisma.task.findUniqueOrThrow({ where: { taskId } });
+  if (task.isRoot) {
+    log.info(`emailOwnerOnTerminalDecision skipped for root task: ${taskId}`);
+    return { messageId: null, skipped: true };
+  }
+
+  const agent = await prisma.agent.findUniqueOrThrow({ where: { agentId: task.agentId } });
+  const objectiveSnippet = task.objective.length > 60 ? `${task.objective.slice(0, 57)}...` : task.objective;
+  const subject = kind === "fail"
+    ? `[Failed] ${agent.name} — ${objectiveSnippet}`
+    : `[Escalated] ${agent.name} — ${objectiveSnippet}`;
+
+  const bodyLines: string[] = [
+    `Task ${kind === "fail" ? "failed" : "escalated"}: ${task.taskId}`,
+    `Agent: ${agent.name} <${agent.agentEmail}>`,
+    `Objective: ${task.objective.slice(0, 300)}`,
+    "",
+    `Stop reason: ${stopReason}`,
+  ];
+  if (kind === "fail" && error) {
+    bodyLines.push(`Error: ${error}`);
+  }
+  if (kind === "escalate" && escalationQuestion) {
+    bodyLines.push(`Escalation question: ${escalationQuestion}`);
+  }
+  bodyLines.push(
+    "",
+    `To continue: reply to this email with guidance. Your reply will wake ${agent.name}'s root task, which will review the failure and decide whether to restart this child with updated instructions.`,
+    "",
+    `Operator restart (atomic stop + inject message + restart):`,
+    `POST /api/agents/${agent.agentId}/tasks/${task.taskId}/restart  body: {"message": "..."}`,
+  );
+  const body = bodyLines.join("\n");
+
+  const messageId = await sendOwnerNotification({
+    agentEmail: agent.agentEmail,
+    ownerEmail: agent.ownerEmail,
+    subject,
+    body,
+  });
+
+  if (messageId) {
+    log.info(`emailOwnerOnTerminalDecision sent: task=${taskId} kind=${kind} messageId=${messageId}`);
+  } else {
+    log.error(`emailOwnerOnTerminalDecision failed to send: task=${taskId} kind=${kind}`);
+  }
+
+  return { messageId, skipped: false };
 }

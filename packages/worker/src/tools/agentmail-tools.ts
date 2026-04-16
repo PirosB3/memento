@@ -109,6 +109,35 @@ export function addTag(email: string, tag: string): string {
   return `${local}+${tag}@${domain}`;
 }
 
+/**
+ * Send a plain-text email from the agent's base inbox directly to a single recipient.
+ * Does NOT auto-CC any `+tag` address — replies route to the base inbox (i.e. root task).
+ * Intended for framework-initiated notifications (e.g. emailing the owner when a child task
+ * hits a terminal state via `decide(fail)` or `decide(escalate)`).
+ *
+ * Returns the AgentMail message ID on success, or null on failure. Does not throw — callers
+ * are expected to continue their work regardless of email outcome.
+ */
+export async function sendOwnerNotification(params: {
+  agentEmail: string;
+  ownerEmail: string;
+  subject: string;
+  body: string;
+}): Promise<string | null> {
+  try {
+    const agentmail = getAgentMailClient();
+    const result = await agentmail.inboxes.messages.send(params.agentEmail, {
+      to: [params.ownerEmail],
+      subject: params.subject,
+      text: params.body,
+    }) as Record<string, unknown>;
+    const messageId = (result.messageId ?? result.message_id) as string | undefined;
+    return messageId ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function extractEmailAddress(addr: string): string {
   // AgentMail returns addresses as either "user@domain" or "Display Name <user@domain>".
   const trimmed = addr.trim();

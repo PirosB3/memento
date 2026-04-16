@@ -8,6 +8,7 @@ import {
   createReadEmailTool,
   createReplyEmailTool,
   createSendEmailTool,
+  sendOwnerNotification,
   setAgentMailClientForTests,
 } from "./agentmail-tools";
 
@@ -600,5 +601,61 @@ describe("agentmail tools", () => {
 
     expect(textResult).toContain("Tagged");
     expect(textResult).not.toContain("Untagged");
+  });
+});
+
+describe("sendOwnerNotification", () => {
+  it("sends a plain-text email with no CC and returns the message id", async () => {
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "notif-1" });
+
+    const messageId = await sendOwnerNotification({
+      agentEmail: "avery@agentmail.test",
+      ownerEmail: "owner@example.com",
+      subject: "[Failed] Avery — Bootstrap ledger",
+      body: "Task failed: abc-123\nError: API unreachable.",
+    });
+
+    expect(messageId).toBe("notif-1");
+    expect(client.inboxes.messages.send).toHaveBeenCalledWith(
+      "avery@agentmail.test",
+      {
+        to: ["owner@example.com"],
+        subject: "[Failed] Avery — Bootstrap ledger",
+        text: "Task failed: abc-123\nError: API unreachable.",
+      },
+    );
+    // No CC field — owner replies route to the base inbox (root task)
+    const call = client.inboxes.messages.send.mock.calls[0];
+    const sentParams = call[1] as Record<string, unknown>;
+    expect(sentParams.cc).toBeUndefined();
+  });
+
+  it("returns null when AgentMail throws — does not propagate the error", async () => {
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockRejectedValue(new Error("AgentMail 503"));
+
+    const messageId = await sendOwnerNotification({
+      agentEmail: "avery@agentmail.test",
+      ownerEmail: "owner@example.com",
+      subject: "[Failed] test",
+      body: "body",
+    });
+
+    expect(messageId).toBeNull();
+  });
+
+  it("accepts alternate message_id field name from AgentMail response", async () => {
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ message_id: "notif-2" });
+
+    const messageId = await sendOwnerNotification({
+      agentEmail: "avery@agentmail.test",
+      ownerEmail: "owner@example.com",
+      subject: "[Escalated] test",
+      body: "body",
+    });
+
+    expect(messageId).toBe("notif-2");
   });
 });

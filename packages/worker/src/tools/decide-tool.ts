@@ -24,14 +24,14 @@ export function createDecideTool(
   const typeDescription = isRoot
     ? `Types:
 - "sleep": Go to sleep and wait for emails or a timer. Set sleepDurationMs.
-- "escalate": Escalate to the owner. You must have already sent the escalation email before calling this.
+- "escalate": Escalate to the owner. The platform emails the owner automatically with your escalationQuestion and stopReason — you do not need to send a separate email.
 
 You are the root task — you cannot complete or fail. You are always on.`
     : `Types:
 - "sleep": Go to sleep only when your TODO list has no actionable items left. Set sleepDurationMs. Only use this when you are waiting for something external (owner reply, timer, participant response).
-- "escalate": Ask the owner for help. Use this the moment you are stuck, blocked by a broken tool path, or missing information only the owner can give you. You must have already sent the escalation email before calling this.
+- "escalate": Ask the owner for help. Use this the moment you are stuck, blocked by a broken tool path, or missing information only the owner can give you. The platform emails the owner automatically with your escalationQuestion and stopReason — you do not need to send a separate email.
 - "complete": This task's objective is achieved. Provide a summary.
-- "fail": Unrecoverable error. Provide an error message.`;
+- "fail": **TERMINAL — only for objectives that are actually impossible.** The platform emails the owner automatically with your error and stopReason. Do NOT use fail for "I ran out of turn time" (use sleep with updated TODO) or "I'm confused about a tool" (use escalate). Once fail is called, the task cannot proceed without operator restart.`;
 
   let sleepAttemptCount = 0;
 
