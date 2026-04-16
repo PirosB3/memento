@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> **⚠️ This is a public repository.** Do NOT add any sensitive or personal content — real email addresses, names, private email/chat conversations, credentials, or inbox/calendar contents — to this file, any committed files, commit messages, or PR descriptions. When working with Daniel's private data (Gmail, Calendar, Memento DB), keep that data out of the repo. Use RFC 2606 reserved domains (`example.com`, `*.test`, `*.invalid`) in any examples.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
