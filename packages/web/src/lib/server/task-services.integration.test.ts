@@ -178,7 +178,7 @@ describe("task services", () => {
     db.task.update.mockResolvedValue(undefined);
     db.schedule.findMany.mockResolvedValue([]);
 
-    await restartTask("agent-1", "task-child", deps);
+    await restartTask("agent-1", "task-child", undefined, deps);
 
     expect(workflows.startTaskWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -193,6 +193,151 @@ describe("task services", () => {
         }),
       }),
     );
+  });
+
+  it("restart with an owner message atomically stops, inserts the message, and starts — without signalling", async () => {
+    const snapshot = {
+      schemaVersion: 1,
+      taskId: "task-child",
+      agentId: "agent-1",
+      isRoot: false,
+      phase: "ESCALATED",
+      logicalStatus: "ESCALATED",
+      turnNumber: 7,
+      lastStopReason: "Blocked on external API",
+      nextWakeAt: null,
+      pendingEmailCount: 0,
+      pendingOwnerCount: 0,
+      pendingScheduleCount: 0,
+    };
+    let terminated = false;
+    const workflows = {
+      startTaskWorkflow: vi.fn().mockResolvedValue({ firstExecutionRunId: "run-fresh" }),
+      terminateWorkflow: vi.fn().mockImplementation(async () => {
+        terminated = true;
+      }),
+      signalWorkflow: vi.fn().mockResolvedValue(undefined),
+      describeWorkflow: vi.fn().mockImplementation(async () => ({
+        runId: "run-1",
+        status: { name: terminated ? "TERMINATED" : "RUNNING" },
+        memo: { summonTaskRuntime: snapshot },
+      })),
+      queryWorkflow: vi.fn(),
+      startScheduleWorkflow: vi.fn(),
+    };
+    const deps = createMockWebDeps({ workflows });
+    const db = deps.db as unknown as {
+      task: {
+        findUnique: ReturnType<typeof vi.fn>;
+        update: ReturnType<typeof vi.fn>;
+      };
+      conversation: {
+        create: ReturnType<typeof vi.fn>;
+      };
+      schedule: {
+        findMany: ReturnType<typeof vi.fn>;
+      };
+    };
+
+    db.task.findUnique.mockResolvedValue(buildTaskRecord({ isRoot: false, taskId: "task-child", tag: "task-child", temporalRunId: "run-1" }));
+    db.task.update.mockResolvedValue(undefined);
+    db.conversation = { create: vi.fn().mockResolvedValue(undefined) };
+    db.schedule.findMany.mockResolvedValue([]);
+
+    await restartTask("agent-1", "task-child", "please retry the reply", deps);
+
+    expect(workflows.terminateWorkflow).toHaveBeenCalledWith(
+      "task-task-child",
+      "Stopped from UI",
+    );
+    expect(db.conversation.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          taskId: "task-child",
+          role: "user",
+          message: expect.stringContaining("## INLINE OWNER MESSAGE"),
+        }),
+      }),
+    );
+    const insertedMessage = db.conversation.create.mock.calls[0][0].data.message as string;
+    expect(insertedMessage).toContain("please retry the reply");
+    expect(workflows.startTaskWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: "task-child",
+        workflowId: "task-task-child",
+        resumeInput: expect.objectContaining({
+          resumedFrom: expect.objectContaining({ phase: "ESCALATED" }),
+        }),
+      }),
+    );
+
+    // The whole point of the atomic endpoint: no SIGNAL_OWNER goes out, so the
+    // new workflow's first turn is the ONLY turn that sees the message —
+    // eliminating the restart-vs-wake race that produced duplicate side effects.
+    expect(workflows.signalWorkflow).not.toHaveBeenCalled();
+
+    // Order matters: terminate → conversation insert → startTaskWorkflow. If
+    // the insert happened AFTER startTaskWorkflow, the new run's first turn
+    // could read the conversation before the owner message is there.
+    const terminateOrder = workflows.terminateWorkflow.mock.invocationCallOrder[0];
+    const insertOrder = db.conversation.create.mock.invocationCallOrder[0];
+    const startOrder = workflows.startTaskWorkflow.mock.invocationCallOrder[0];
+    expect(terminateOrder).toBeLessThan(insertOrder);
+    expect(insertOrder).toBeLessThan(startOrder);
+  });
+
+  it("restart with a whitespace-only message behaves like a plain restart", async () => {
+    const snapshot = {
+      schemaVersion: 1,
+      taskId: "task-child",
+      agentId: "agent-1",
+      isRoot: false,
+      phase: "SLEEPING",
+      logicalStatus: "SLEEPING",
+      turnNumber: 2,
+      lastStopReason: null,
+      nextWakeAt: null,
+      pendingEmailCount: 0,
+      pendingOwnerCount: 0,
+      pendingScheduleCount: 0,
+    };
+    const workflows = {
+      startTaskWorkflow: vi.fn().mockResolvedValue({ firstExecutionRunId: "run-plain" }),
+      terminateWorkflow: vi.fn(),
+      signalWorkflow: vi.fn(),
+      describeWorkflow: vi.fn().mockResolvedValue({
+        runId: "run-1",
+        status: { name: "TERMINATED" },
+        memo: { summonTaskRuntime: snapshot },
+      }),
+      queryWorkflow: vi.fn(),
+      startScheduleWorkflow: vi.fn(),
+    };
+    const deps = createMockWebDeps({ workflows });
+    const db = deps.db as unknown as {
+      task: {
+        findUnique: ReturnType<typeof vi.fn>;
+        update: ReturnType<typeof vi.fn>;
+      };
+      conversation: {
+        create: ReturnType<typeof vi.fn>;
+      };
+      schedule: {
+        findMany: ReturnType<typeof vi.fn>;
+      };
+    };
+
+    db.task.findUnique.mockResolvedValue(buildTaskRecord({ isRoot: false, taskId: "task-child", tag: "task-child", temporalRunId: "run-1" }));
+    db.task.update.mockResolvedValue(undefined);
+    db.conversation = { create: vi.fn().mockResolvedValue(undefined) };
+    db.schedule.findMany.mockResolvedValue([]);
+
+    await restartTask("agent-1", "task-child", "   ", deps);
+
+    expect(workflows.terminateWorkflow).not.toHaveBeenCalled();
+    expect(db.conversation.create).not.toHaveBeenCalled();
+    expect(workflows.signalWorkflow).not.toHaveBeenCalled();
+    expect(workflows.startTaskWorkflow).toHaveBeenCalled();
   });
 
   it("signals direct owner wakes with structured inline payloads", async () => {
