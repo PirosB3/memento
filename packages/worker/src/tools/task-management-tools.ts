@@ -71,7 +71,7 @@ export function createSpawnTaskTool(agentId: string, agentEmail: string): AgentT
   };
 }
 
-export function createWakeTaskTool(): AgentTool {
+export function createWakeTaskTool(agentId: string): AgentTool {
   return {
     name: "wake_task",
     label: "Wake Task",
@@ -85,7 +85,9 @@ export function createWakeTaskTool(): AgentTool {
       try {
         const { taskId, message } = params as { taskId: string; message: string };
 
-        const task = await prisma.task.findUniqueOrThrow({ where: { taskId } });
+        const task = await findChildTaskForAgent(taskId, agentId);
+        if (!task) return unauthorizedTaskError(taskId);
+
         if (task.status === "RUNNING") {
           return {
             content: [{ type: "text" as const, text: `Task ${taskId} is currently RUNNING. Sleep and retry later.` }],
@@ -134,7 +136,24 @@ ${message}`,
   };
 }
 
-export function createCancelTaskTool(): AgentTool {
+async function findChildTaskForAgent(taskId: string, agentId: string) {
+  return prisma.task.findFirst({
+    where: {
+      taskId,
+      agentId,
+      isRoot: false,
+    },
+  });
+}
+
+function unauthorizedTaskError(taskId: string) {
+  return {
+    content: [{ type: "text" as const, text: `Task ${taskId} not found for this agent.` }],
+    details: { error: true, reason: "TASK_NOT_FOUND_FOR_AGENT" },
+  };
+}
+
+export function createCancelTaskTool(agentId: string): AgentTool {
   return {
     name: "cancel_task",
     label: "Cancel Task",
@@ -145,6 +164,9 @@ export function createCancelTaskTool(): AgentTool {
     execute: async (_toolCallId, params) => {
       try {
         const { taskId } = params as { taskId: string };
+        const task = await findChildTaskForAgent(taskId, agentId);
+        if (!task) return unauthorizedTaskError(taskId);
+
         log.info(`Cancelling task: ${taskId}`);
         await prisma.task.update({
           where: { taskId },
@@ -215,7 +237,7 @@ export function createListTasksTool(agentId: string): AgentTool {
   };
 }
 
-export function createGetTaskConversationTool(): AgentTool {
+export function createGetTaskConversationTool(agentId: string): AgentTool {
   return {
     name: "get_task_conversation",
     label: "Get Task Conversation",
@@ -227,6 +249,8 @@ export function createGetTaskConversationTool(): AgentTool {
     execute: async (_toolCallId, params) => {
       try {
         const { taskId, limit } = params as { taskId: string; limit?: number };
+        const task = await findChildTaskForAgent(taskId, agentId);
+        if (!task) return unauthorizedTaskError(taskId);
 
         const messages = await prisma.conversation.findMany({
           where: { taskId },
