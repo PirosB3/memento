@@ -42,6 +42,9 @@ export async function getAgentView(
     soul: agent.soul,
     boundaries: agent.boundaries,
     tools: agent.tools,
+    signatureDisplayName: agent.signatureDisplayName ?? null,
+    signatureDescription: agent.signatureDescription ?? null,
+    profileImageUrl: agent.profileImageUrl ?? null,
     rootTask: rootTask
       ? serializeTaskDetail(
           (rootTaskDetail ?? {

@@ -3,4 +3,6 @@ export { buildSystemPrompt } from "./system-prompt";
 export { createLogger } from "./logger";
 export type { Logger } from "./logger";
 export { getAgentsDir, getDatabaseUrl, getTemporalAddress, getWorkspaceRoot } from "./runtime";
+export { buildHtmlSignature, buildTextSignature } from "./signature";
+export type { AgentSignature } from "./signature";
 export * from "./types";

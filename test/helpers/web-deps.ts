@@ -7,6 +7,7 @@ export function createMockWebDeps(
     mail?: Partial<WebServiceDependencies["mail"]>;
     llm?: Partial<WebServiceDependencies["llm"]>;
     workflows?: Partial<WebServiceDependencies["workflows"]>;
+    avatars?: Partial<WebServiceDependencies["avatars"]>;
   } = {},
 ): WebServiceDependencies {
   const db = {
@@ -55,6 +56,10 @@ export function createMockWebDeps(
       describeWorkflow: vi.fn(),
       queryWorkflow: vi.fn(),
       ...overrides.workflows,
+    },
+    avatars: {
+      generateAndUploadAvatar: vi.fn().mockResolvedValue("https://pub-example.test/pfps/agent-1.png"),
+      ...overrides.avatars,
     },
   };
 }

@@ -67,9 +67,18 @@ export default async function AgentsPage() {
             return (
               <Link key={agent.agentId} href={`/agents/${agent.agentId}`} className="card p-5 block group">
                 <div className="flex items-start gap-4">
-                  <div className={`w-10 h-10 rounded-lg ${getAgentColor(agent.name)} flex items-center justify-center flex-shrink-0`}>
-                    <span className="text-white font-[family-name:var(--font-outfit)] font-bold text-sm">{initial}</span>
-                  </div>
+                  {agent.profileImageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={agent.profileImageUrl}
+                      alt={`${agent.name} avatar`}
+                      className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+                    />
+                  ) : (
+                    <div className={`w-10 h-10 rounded-lg ${getAgentColor(agent.name)} flex items-center justify-center flex-shrink-0`}>
+                      <span className="text-white font-[family-name:var(--font-outfit)] font-bold text-sm">{initial}</span>
+                    </div>
+                  )}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2.5 mb-1">
                       <h2 className="font-[family-name:var(--font-outfit)] font-semibold text-[var(--foreground)] group-hover:text-[var(--accent)] transition-colors truncate">

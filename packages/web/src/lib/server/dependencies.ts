@@ -5,6 +5,11 @@ import { pathToFileURL } from "node:url";
 import { prisma, getTemporalAddress, getWorkspaceRoot, TASK_QUEUE } from "@summon/shared";
 import crypto from "crypto";
 import type { TaskWorkflowResumeInput } from "@summon/shared";
+import {
+  createFakeAvatarGenerator,
+  createRealAvatarGenerator,
+  type AvatarGenerator,
+} from "./avatar-generation";
 
 export interface MailGateway {
   createInbox(params: { username: string; displayName: string }): Promise<{ email: string }>;
@@ -43,6 +48,7 @@ export interface WebServiceDependencies {
   mail: MailGateway;
   llm: LlmGateway;
   workflows: WorkflowClient;
+  avatars: AvatarGenerator;
 }
 
 interface CodexCredentials {
@@ -88,7 +94,7 @@ async function getTemporalClient(): Promise<Client> {
   return temporalClient;
 }
 
-function isFakeMode(flag: "MAIL" | "LLM" | "WORKFLOW"): boolean {
+function isFakeMode(flag: "MAIL" | "LLM" | "WORKFLOW" | "AVATARS"): boolean {
   return process.env.SUMMON_FAKE_EXTERNALS === "1" || process.env[`SUMMON_FAKE_${flag}`] === "1";
 }
 
@@ -333,5 +339,6 @@ export function getWebServiceDependencies(): WebServiceDependencies {
     workflows: isFakeMode("WORKFLOW")
       ? createFakeWorkflowClient()
       : createRealWorkflowClient(),
+    avatars: isFakeMode("AVATARS") ? createFakeAvatarGenerator() : createRealAvatarGenerator(),
   };
 }

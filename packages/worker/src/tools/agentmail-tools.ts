@@ -2,6 +2,8 @@ import { Type } from "@sinclair/typebox";
 import { AgentMailClient } from "agentmail";
 import fs from "fs";
 import path from "path";
+import { buildHtmlSignature, buildTextSignature } from "@summon/shared";
+import type { AgentSignature } from "@summon/shared";
 import type { AgentTool } from "../../pi-types.js";
 import { resolveAuthorizedPath } from "./file-tools.js";
 
@@ -228,20 +230,43 @@ function normalizeAttachments(agentDir: string, attachments?: AttachmentInput[])
   });
 }
 
+function escapeHtmlForTextFallback(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function textToHtml(text: string): string {
+  return escapeHtmlForTextFallback(text)
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
 function buildEmailPayload(
   rawParams: SendEmailParams | ReplyEmailParams,
   options: {
     mode: "send" | "reply";
     agentDir: string;
     taggedEmail?: string | null;
+    signature?: AgentSignature | null;
   },
 ): OutgoingEmailInput {
-  const text = normalizeString(rawParams.body);
-  const html = normalizeString(rawParams.html);
+  let text = normalizeString(rawParams.body);
+  let html = normalizeString(rawParams.html);
   const attachments = normalizeAttachments(options.agentDir, rawParams.attachments);
 
   if (!text && !html && attachments.length === 0) {
     throw new Error("Provide at least one of body, html, or attachments.");
+  }
+
+  if (options.signature && (text || html)) {
+    const textSig = buildTextSignature(options.signature);
+    const htmlSig = buildHtmlSignature(options.signature);
+    const originalText = text;
+    text = `${text ?? ""}${textSig}`;
+    html = `${html ?? textToHtml(originalText ?? "")}${htmlSig}`;
   }
 
   const cc = normalizeAddressList(rawParams.cc);
@@ -408,7 +433,12 @@ function extractDownloadValue<T extends string | number>(
 // SEND EMAIL — root sends from base, child auto-CCs its +tag address for routing
 // ============================================================================
 
-export function createSendEmailTool(agentEmail: string, agentDir: string, tag?: string): AgentTool {
+export function createSendEmailTool(
+  agentEmail: string,
+  agentDir: string,
+  tag?: string,
+  signature?: AgentSignature | null,
+): AgentTool {
   const inboxId = agentEmail;
   const taggedEmail = tag ? addTag(agentEmail, tag) : null;
 
@@ -433,7 +463,7 @@ export function createSendEmailTool(agentEmail: string, agentDir: string, tag?: 
       try {
         const p = params as SendEmailParams;
         const agentmail = getAgentMailClient();
-        const sendParams = buildEmailPayload(p, { mode: "send", agentDir, taggedEmail });
+        const sendParams = buildEmailPayload(p, { mode: "send", agentDir, taggedEmail, signature });
         const result = await agentmail.inboxes.messages.send(inboxId, sendParams) as Record<string, unknown>;
         const toList = normalizeAddressList(p.to);
         const ccList = normalizeAddressList(sendParams.cc as string[] | undefined);
@@ -466,7 +496,12 @@ export function createSendEmailTool(agentEmail: string, agentDir: string, tag?: 
 // REPLY EMAIL
 // ============================================================================
 
-export function createReplyEmailTool(agentEmail: string, agentDir: string, tag?: string): AgentTool {
+export function createReplyEmailTool(
+  agentEmail: string,
+  agentDir: string,
+  tag?: string,
+  signature?: AgentSignature | null,
+): AgentTool {
   const inboxId = agentEmail;
   const taggedEmail = tag ? addTag(agentEmail, tag) : null;
   const isSelfAddress = createSelfAddressMatcher(agentEmail);
@@ -526,11 +561,11 @@ export function createReplyEmailTool(agentEmail: string, agentDir: string, tag?:
 
           replyParams = buildEmailPayload(
             { ...p, replyAll: false, cc: mergedCc },
-            { mode: "reply", agentDir, taggedEmail: null },
+            { mode: "reply", agentDir, taggedEmail: null, signature },
           );
           replyParams.to = toList;
         } else {
-          replyParams = buildEmailPayload(p, { mode: "reply", agentDir, taggedEmail });
+          replyParams = buildEmailPayload(p, { mode: "reply", agentDir, taggedEmail, signature });
         }
 
         const result = await agentmail.inboxes.messages.reply(inboxId, p.messageId, replyParams) as Record<string, unknown>;

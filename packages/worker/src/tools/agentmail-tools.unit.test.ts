@@ -58,6 +58,78 @@ function createArrayBuffer(bytes: Buffer): ArrayBuffer {
 }
 
 describe("agentmail tools", () => {
+  it("appends the agent signature to text and generates HTML fallback when only text was provided", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-sig-1" });
+
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, {
+      displayName: "Emma P.",
+      description: "Inbox concierge for the Smith household.",
+      profileImageUrl: "https://pub-example.test/pfps/emma.png",
+    });
+    await tool.execute("call-sig-1", {
+      to: "person@example.com",
+      subject: "Hello",
+      body: "Hi there",
+    });
+
+    const [, sendParams] = client.inboxes.messages.send.mock.calls[0];
+    expect(sendParams.text).toContain("Hi there");
+    expect(sendParams.text).toContain("-- \nEmma P.\nInbox concierge for the Smith household.");
+    expect(sendParams.html).toContain("Hi there");
+    expect(sendParams.html).toContain('src="https://pub-example.test/pfps/emma.png"');
+    expect(sendParams.html).toContain("Emma P.");
+  });
+
+  it("appends the signature after caller-supplied HTML without dropping it", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-sig-2" });
+
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, {
+      displayName: "Emma P.",
+      description: null,
+      profileImageUrl: null,
+    });
+    await tool.execute("call-sig-2", {
+      to: "person@example.com",
+      subject: "Hello",
+      body: "Text body",
+      html: "<p>HTML body</p>",
+    });
+
+    const [, sendParams] = client.inboxes.messages.send.mock.calls[0];
+    expect(sendParams.html?.indexOf("<p>HTML body</p>")).toBeGreaterThanOrEqual(0);
+    expect(sendParams.html?.indexOf("Emma P.")).toBeGreaterThan(
+      sendParams.html!.indexOf("<p>HTML body</p>"),
+    );
+    expect(sendParams.html).not.toContain("<img");
+    expect(sendParams.text).toContain("Text body\n\n-- \nEmma P.");
+  });
+
+  it("skips signature injection when no body or html is provided", async () => {
+    const agentDir = createTempAgentDir();
+    fs.writeFileSync(path.join(agentDir, "note.txt"), "attached-only", "utf-8");
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-sig-3" });
+
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, {
+      displayName: "Emma P.",
+      description: "Helps you schedule meetings without the back-and-forth.",
+      profileImageUrl: "https://pub-example.test/pfps/emma.png",
+    });
+    await tool.execute("call-sig-3", {
+      to: "person@example.com",
+      subject: "Hello",
+      attachments: [{ path: "note.txt" }],
+    });
+
+    const [, sendParams] = client.inboxes.messages.send.mock.calls[0];
+    expect(sendParams.text).toBeUndefined();
+    expect(sendParams.html).toBeUndefined();
+  });
+
   it("auto-ccs the tagged address for child task sends and dedupes it", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();
