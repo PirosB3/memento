@@ -20,6 +20,7 @@ interface AgentResult {
   agentId: string;
   agentEmail: string;
   status: string;
+  profileImageUrl: string | null;
 }
 
 const initialPrepareAgentState: PrepareAgentActionState = {
@@ -53,6 +54,7 @@ export default function NewAgentWizard() {
   const [soul, setSoul] = useState("");
   const [boundaries, setBoundaries] = useState("");
   const [tools, setTools] = useState("");
+  const [signatureDescription, setSignatureDescription] = useState("");
   const [agent, setAgent] = useState<AgentResult | null>(null);
 
   const [prepareState, prepareFormAction, preparePending] = useActionState(
@@ -85,6 +87,7 @@ export default function NewAgentWizard() {
       setSoul(generateState.result.soul);
       setBoundaries(generateState.result.boundaries);
       setTools(generateState.result.tools);
+      setSignatureDescription(generateState.result.signatureDescription ?? "");
       setError(null);
       setStep("review");
     } else if (generateState.error) {
@@ -255,6 +258,22 @@ export default function NewAgentWizard() {
               />
             </div>
           ))}
+          <div>
+            <label htmlFor="agent-signatureDescription" className="block text-xs font-semibold uppercase tracking-wider text-[var(--muted)] mb-2">
+              EMAIL SIGNATURE (one-line bio)
+            </label>
+            <textarea
+              id="agent-signatureDescription"
+              name="signatureDescription"
+              value={signatureDescription}
+              onChange={(event) => setSignatureDescription(event.target.value)}
+              placeholder="Inbox concierge for the Smith household."
+              className="w-full border rounded-lg p-3 h-16 resize-y text-sm"
+            />
+            <p className="text-[10px] text-[var(--muted)] mt-1.5">
+              Appears in the footer of every email the agent sends, alongside its name and avatar.
+            </p>
+          </div>
           <div className="flex gap-3">
             <button
               type="button"
@@ -276,11 +295,20 @@ export default function NewAgentWizard() {
 
       {step === "done" && agent && (
         <div className="text-center space-y-4 py-8">
-          <div className="w-20 h-20 rounded-2xl mx-auto mb-2 bg-[var(--accent-muted)] border border-[var(--card-border)] flex items-center justify-center">
-            <span className="text-[var(--accent)] text-2xl font-[family-name:var(--font-outfit)] font-bold">
-              {(name || "A").charAt(0).toUpperCase()}
-            </span>
-          </div>
+          {agent.profileImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={agent.profileImageUrl}
+              alt={`${name || "Agent"} avatar`}
+              className="w-20 h-20 rounded-2xl mx-auto mb-2 object-cover border border-[var(--card-border)]"
+            />
+          ) : (
+            <div className="w-20 h-20 rounded-2xl mx-auto mb-2 bg-[var(--accent-muted)] border border-[var(--card-border)] flex items-center justify-center">
+              <span className="text-[var(--accent)] text-2xl font-[family-name:var(--font-outfit)] font-bold">
+                {(name || "A").charAt(0).toUpperCase()}
+              </span>
+            </div>
+          )}
           <h2 className="font-[family-name:var(--font-outfit)] text-xl font-semibold">Agent Created</h2>
           <p className="text-sm text-[var(--muted-foreground)]">Your agent is ready. Its email address is:</p>
           <p className="font-mono text-sm bg-[rgba(255,255,255,0.04)] border border-[var(--card-border)] inline-block px-4 py-2 rounded-lg text-[var(--accent)]">

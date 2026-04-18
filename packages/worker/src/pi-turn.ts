@@ -5,7 +5,7 @@ import {
   convertResponsesTools,
 } from "../../../repos/pi-mono/packages/ai/dist/providers/openai-responses-shared.js";
 import { prisma, buildSystemPrompt, createLogger, getAgentsDir } from "@summon/shared";
-import type { DecisionResult } from "@summon/shared";
+import type { AgentSignature, DecisionResult } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
 import {
   compactTaskContext,
@@ -99,12 +99,25 @@ export async function runPiAgentTurnImpl(
   // 6. Set up decision capture
   let capturedDecision: DecisionResult | null = null;
 
+  // Build the email signature block from agent profile fields (null-safe — if the
+  // agent pre-dates the feature and has no signature fields, outgoing emails remain
+  // unsigned).
+  const signature: AgentSignature | null = agent.signatureDisplayName
+    ? {
+        displayName: agent.signatureDisplayName,
+        description: agent.signatureDescription ?? null,
+        profileImageUrl: agent.profileImageUrl ?? null,
+        companyName: process.env.COMPANY_NAME?.trim() || null,
+        companyWebsite: process.env.COMPANY_WEBSITE?.trim() || null,
+      }
+    : null;
+
   // 7. Build tools based on root vs child
   const tools = isRoot
     ? [
         // Root: unfiltered email tools, base address
-        createSendEmailTool(agent.agentEmail, agentDir),
-        createReplyEmailTool(agent.agentEmail, agentDir),
+        createSendEmailTool(agent.agentEmail, agentDir, undefined, signature),
+        createReplyEmailTool(agent.agentEmail, agentDir, undefined, signature),
         createReadEmailTool(agent.agentEmail, agent.ownerEmail),
         createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
         createReadEmailsTool(agent.agentEmail),
@@ -128,8 +141,8 @@ export async function runPiAgentTurnImpl(
       ]
     : [
         // Child: filtered email tools, +tag address
-        createSendEmailTool(agent.agentEmail, agentDir, task.tag),
-        createReplyEmailTool(agent.agentEmail, agentDir, task.tag),
+        createSendEmailTool(agent.agentEmail, agentDir, task.tag, signature),
+        createReplyEmailTool(agent.agentEmail, agentDir, task.tag, signature),
         createReadEmailTool(agent.agentEmail, agent.ownerEmail),
         createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
         createFilteredReadEmailsTool(agent.agentEmail, task.tag),

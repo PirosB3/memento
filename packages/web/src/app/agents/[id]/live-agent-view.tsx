@@ -72,22 +72,58 @@ export default function LiveAgentView({
   );
   const derivedStatus = rootWorkflowStatus === "STOPPED" ? "STOPPED" : hasActiveTask ? "RUNNING" : "IDLE";
 
+  const signatureDisplayName = agent.signatureDisplayName ?? agent.name;
+  const signatureDescription = agent.signatureDescription ?? "";
+
   const configContent = (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      {[
-        { label: "Soul", desc: "Personality & communication style", value: agent.soul },
-        { label: "Boundaries", desc: "Constraints & escalation rules", value: agent.boundaries },
-        { label: "Tools", desc: "Capabilities & access", value: agent.tools },
-      ].map(({ label, desc, value }) => (
-        <div key={label} className="bg-card border border-border rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-foreground mb-0.5">{label}</h3>
-          <p className="text-[10px] text-muted-foreground mb-3">{desc}</p>
-          <Separator className="mb-3 bg-border" />
-          <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
-            {value}
-          </p>
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[
+          { label: "Soul", desc: "Personality & communication style", value: agent.soul },
+          { label: "Boundaries", desc: "Constraints & escalation rules", value: agent.boundaries },
+          { label: "Tools", desc: "Capabilities & access", value: agent.tools },
+        ].map(({ label, desc, value }) => (
+          <div key={label} className="bg-card border border-border rounded-xl p-4">
+            <h3 className="text-sm font-semibold text-foreground mb-0.5">{label}</h3>
+            <p className="text-[10px] text-muted-foreground mb-3">{desc}</p>
+            <Separator className="mb-3 bg-border" />
+            <p className="text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed">
+              {value}
+            </p>
+          </div>
+        ))}
+      </div>
+      <div className="bg-card border border-border rounded-xl p-4">
+        <h3 className="text-sm font-semibold text-foreground mb-0.5">Email Signature</h3>
+        <p className="text-[10px] text-muted-foreground mb-3">Appended to every outbound email</p>
+        <Separator className="mb-3 bg-border" />
+        <div className="flex items-center gap-4">
+          {agent.profileImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={agent.profileImageUrl}
+              alt={`${signatureDisplayName} avatar`}
+              className="w-16 h-16 rounded-2xl object-cover border border-border"
+            />
+          ) : (
+            <div className="w-16 h-16 rounded-2xl bg-[var(--accent-muted)] border border-border flex items-center justify-center">
+              <span className="text-[var(--accent)] text-xl font-bold">
+                {signatureDisplayName.charAt(0).toUpperCase()}
+              </span>
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-foreground">{signatureDisplayName}</div>
+            {signatureDescription ? (
+              <div className="text-xs text-muted-foreground mt-0.5">{signatureDescription}</div>
+            ) : (
+              <div className="text-xs text-muted-foreground/60 italic mt-0.5">
+                No description set — only the name will appear in the signature.
+              </div>
+            )}
+          </div>
         </div>
-      ))}
+      </div>
     </div>
   );
 
@@ -252,11 +288,20 @@ export default function LiveAgentView({
     <>
       <div className="bg-card border border-border rounded-xl p-6 mb-6">
         <div className="flex items-center gap-4 mb-3">
-          <div className="w-16 h-16 rounded-2xl bg-[var(--accent-muted)] border border-[var(--card-border)] flex items-center justify-center">
-            <span className="text-[var(--accent)] text-2xl font-[family-name:var(--font-outfit)] font-bold">
-              {agent.name.charAt(0).toUpperCase()}
-            </span>
-          </div>
+          {agent.profileImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={agent.profileImageUrl}
+              alt={`${agent.name} avatar`}
+              className="w-16 h-16 rounded-2xl object-cover border border-[var(--card-border)]"
+            />
+          ) : (
+            <div className="w-16 h-16 rounded-2xl bg-[var(--accent-muted)] border border-[var(--card-border)] flex items-center justify-center">
+              <span className="text-[var(--accent)] text-2xl font-[family-name:var(--font-outfit)] font-bold">
+                {agent.name.charAt(0).toUpperCase()}
+              </span>
+            </div>
+          )}
           <h1 className="font-[family-name:var(--font-outfit)] text-2xl font-bold tracking-tight">
             {agent.name}
           </h1>

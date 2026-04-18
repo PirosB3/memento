@@ -21,6 +21,7 @@ export interface GenerateAgentActionState {
     soul: string;
     boundaries: string;
     tools: string;
+    signatureDescription: string;
   } | null;
 }
 
@@ -31,6 +32,7 @@ export interface CreateAgentActionState {
     agentId: string;
     agentEmail: string;
     status: string;
+    profileImageUrl: string | null;
   } | null;
 }
 
@@ -89,12 +91,14 @@ export async function createAgentAction(
   formData: FormData,
 ): Promise<CreateAgentActionState> {
   try {
+    const signatureDescription = String(formData.get("signatureDescription") ?? "").trim();
     const agent = await createAgent({
       ownerEmail: String(formData.get("ownerEmail") ?? ""),
       name: String(formData.get("name") ?? ""),
       soul: String(formData.get("soul") ?? ""),
       boundaries: String(formData.get("boundaries") ?? ""),
       tools: String(formData.get("tools") ?? ""),
+      signatureDescription: signatureDescription || undefined,
     });
 
     revalidatePath("/agents");
@@ -106,6 +110,7 @@ export async function createAgentAction(
         agentId: agent.agentId,
         agentEmail: agent.agentEmail,
         status: agent.status,
+        profileImageUrl: agent.profileImageUrl ?? null,
       },
     };
   } catch (error) {

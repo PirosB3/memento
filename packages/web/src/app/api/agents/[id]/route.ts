@@ -26,7 +26,14 @@ export async function PUT(
   { params }: AgentRouteContext,
 ) {
   const { id } = await params;
-  const { soul, boundaries, tools } = await request.json();
+  const {
+    soul,
+    boundaries,
+    tools,
+    signatureDisplayName,
+    signatureDescription,
+    profileImageUrl,
+  } = await request.json();
 
   const agent = await prisma.agent.findUnique({
     where: { agentId: id },
@@ -42,6 +49,9 @@ export async function PUT(
       ...(soul !== undefined && { soul }),
       ...(boundaries !== undefined && { boundaries }),
       ...(tools !== undefined && { tools }),
+      ...(signatureDisplayName !== undefined && { signatureDisplayName }),
+      ...(signatureDescription !== undefined && { signatureDescription }),
+      ...(profileImageUrl !== undefined && { profileImageUrl }),
     },
   });
 

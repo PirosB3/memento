@@ -185,7 +185,8 @@ Copy `.env.example` to `.env` at repo root and fill in:
 - `ANTHROPIC_API_KEY` — required for AI agent turns
 - `AGENTMAIL_API_KEY` — required for email operations
 - `BROWSERBASE_API_KEY` and `BROWSERBASE_PROJECT_ID` — required for `bb` and `browse`
-- `OPENAI_API_KEY` — optional, for any OpenAI-backed workflows
+- `OPENAI_API_KEY` — required for agent avatar generation (`gpt-image-1` during agent creation)
+- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `R2_PUBLIC_URL` — Cloudflare R2 credentials for hosting generated agent avatars
 
 The web package also needs `packages/web/.env.local` with the same keys (Next.js doesn't read from repo root).
 

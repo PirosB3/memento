@@ -2,6 +2,10 @@ import crypto from "crypto";
 import { getWebServiceDependencies } from "./dependencies";
 import type { WebServiceDependencies } from "./dependencies";
 import { parseJsonArray, parseJsonObject } from "./json";
+import { buildAvatarPrompt } from "./avatar-generation";
+import { createLogger } from "@summon/shared";
+
+const log = createLogger("agent-services");
 
 export interface PrepareAgentInput {
   objective: string;
@@ -18,6 +22,8 @@ export interface CreateAgentInput {
   soul: string;
   boundaries: string;
   tools: string;
+  signatureDisplayName?: string;
+  signatureDescription?: string;
 }
 
 export interface GeneratedAgentConfig {
@@ -25,6 +31,7 @@ export interface GeneratedAgentConfig {
   boundaries: string;
   tools: string;
   name: string;
+  signatureDescription: string;
 }
 
 export type PersistedAgent = Awaited<
@@ -89,7 +96,7 @@ export async function generateAgentConfig(
   const text = await deps.llm.createText({
     model: "claude-opus-4-6",
     maxTokens: 2048,
-    system: `You are generating the configuration for an AI email agent. Based on the user's objective and their answers to clarifying questions, generate three fields:
+    system: `You are generating the configuration for an AI email agent. Based on the user's objective and their answers to clarifying questions, generate five fields:
 
 1. **SOUL** — The agent's personality, voice, and communication style. How it writes emails, its tone, level of formality, use of humor, etc.
 
@@ -99,7 +106,9 @@ export async function generateAgentConfig(
 
 4. **NAME** — A short, friendly first name for the agent (e.g. "Fred", "Luna", "Max"). Pick something that fits the agent's personality and task.
 
-Return ONLY a JSON object with keys "soul", "boundaries", "tools", "name". Each value is a string. No other text.`,
+5. **SIGNATURE_DESCRIPTION** — A concise job title of 2 to 4 words in title case, shown in the agent's email signature next to the company name. Captures the agent's function. Examples: "Personal Assistant", "Recruiting Coordinator", "Bookkeeper", "Household Manager". No trailing punctuation.
+
+Return ONLY a JSON object with keys "soul", "boundaries", "tools", "name", "signatureDescription". Each value is a string. No other text.`,
     prompt: `Objective: ${input.objective}\nOwner email: ${input.ownerEmail}\n\nClarifying Q&A:\n${answersText}`,
   });
 
@@ -168,6 +177,19 @@ export async function createAgent(
   const agentEmail = await createAgentInboxWithRetry(nameSlug, input.name, deps);
   const rootTaskId = crypto.randomUUID();
 
+  let profileImageUrl: string | null = null;
+  try {
+    profileImageUrl = await deps.avatars.generateAndUploadAvatar({
+      agentId,
+      prompt: await buildAvatarPrompt(input.name, input.soul),
+    });
+  } catch (error) {
+    log.warn(
+      `Avatar generation failed for agent ${agentId}; continuing without profile image`,
+      { error: error instanceof Error ? error.message : String(error) },
+    );
+  }
+
   let temporalRunId = "failed-to-start";
   try {
     const started = await deps.workflows.startTaskWorkflow({
@@ -189,6 +211,9 @@ export async function createAgent(
       soul: input.soul,
       boundaries: input.boundaries,
       tools: input.tools,
+      signatureDisplayName: input.signatureDisplayName ?? input.name,
+      signatureDescription: input.signatureDescription ?? null,
+      profileImageUrl,
       temporalRunId,
     },
   });

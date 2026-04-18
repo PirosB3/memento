@@ -35,6 +35,9 @@ export type AgentView = {
   soul: string;
   boundaries: string;
   tools: string;
+  signatureDisplayName: string | null;
+  signatureDescription: string | null;
+  profileImageUrl: string | null;
   rootTask: TaskDetailView | null;
   tasks: TaskSummaryView[];
 };

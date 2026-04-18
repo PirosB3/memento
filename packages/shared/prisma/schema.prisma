@@ -7,16 +7,19 @@ datasource db {
 }
 
 model Agent {
-  agentId       String   @id @map("agent_id")
-  name          String
-  agentEmail    String   @unique @map("agent_email")
-  ownerEmail    String   @map("owner_email")
-  soul          String
-  boundaries    String
-  tools         String
-  status        String   @default("IDLE")
-  temporalRunId String   @map("temporal_run_id")
-  createdAt     DateTime @default(now()) @map("created_at")
+  agentId              String   @id @map("agent_id")
+  name                 String
+  agentEmail           String   @unique @map("agent_email")
+  ownerEmail           String   @map("owner_email")
+  soul                 String
+  boundaries           String
+  tools                String
+  signatureDisplayName String?  @map("signature_display_name")
+  signatureDescription String?  @map("signature_description")
+  profileImageUrl      String?  @map("profile_image_url")
+  status               String   @default("IDLE")
+  temporalRunId        String   @map("temporal_run_id")
+  createdAt            DateTime @default(now()) @map("created_at")
 
   tasks     Task[]
   schedules Schedule[]
