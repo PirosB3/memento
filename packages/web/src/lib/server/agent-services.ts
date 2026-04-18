@@ -106,7 +106,7 @@ export async function generateAgentConfig(
 
 4. **NAME** — A short, friendly first name for the agent (e.g. "Fred", "Luna", "Max"). Pick something that fits the agent's personality and task.
 
-5. **SIGNATURE_DESCRIPTION** — A single sentence, 8 to 14 words, written in the agent's voice, suitable for an email footer. Describes the agent's role to recipients in one line. Examples: "Inbox concierge for the Smith household." or "Helping you schedule meetings without the back-and-forth." No trailing period is required but not forbidden.
+5. **SIGNATURE_DESCRIPTION** — A concise job title of 2 to 4 words in title case, shown in the agent's email signature next to the company name. Captures the agent's function. Examples: "Personal Assistant", "Recruiting Coordinator", "Bookkeeper", "Household Manager". No trailing punctuation.
 
 Return ONLY a JSON object with keys "soul", "boundaries", "tools", "name", "signatureDescription". Each value is a string. No other text.`,
     prompt: `Objective: ${input.objective}\nOwner email: ${input.ownerEmail}\n\nClarifying Q&A:\n${answersText}`,
@@ -181,7 +181,7 @@ export async function createAgent(
   try {
     profileImageUrl = await deps.avatars.generateAndUploadAvatar({
       agentId,
-      prompt: buildAvatarPrompt(input.name, input.soul),
+      prompt: await buildAvatarPrompt(input.name, input.soul),
     });
   } catch (error) {
     log.warn(

@@ -76,10 +76,12 @@ describe("agentmail tools", () => {
 
     const [, sendParams] = client.inboxes.messages.send.mock.calls[0];
     expect(sendParams.text).toContain("Hi there");
-    expect(sendParams.text).toContain("-- \nEmma P.\nInbox concierge for the Smith household.");
+    expect(sendParams.text).toContain("-- \nEmma P.\n");
+    expect(sendParams.text).toContain("Inbox concierge for the Smith household.");
     expect(sendParams.html).toContain("Hi there");
     expect(sendParams.html).toContain('src="https://pub-example.test/pfps/emma.png"');
     expect(sendParams.html).toContain("Emma P.");
+    expect(sendParams.html).toContain("Inbox concierge for the Smith household.");
   });
 
   it("appends the signature after caller-supplied HTML without dropping it", async () => {

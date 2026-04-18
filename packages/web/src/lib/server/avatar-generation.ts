@@ -52,13 +52,32 @@ function getPublicUrl(): string {
   return url.replace(/\/+$/, "");
 }
 
-export function buildAvatarPrompt(name: string, soul: string): string {
-  const soulSnippet = soul.trim().slice(0, 200);
-  return (
-    `Friendly portrait illustration of a character named ${name}. ` +
-    `Flat vector style, soft palette, neutral background, square framing, centered face. ` +
-    `Personality: ${soulSnippet}`
-  );
+const PORTRAIT_BRIEF_SYSTEM = `You turn an AI agent's personality description (SOUL) into a short casting brief for a photorealistic LinkedIn-style headshot of the person who would embody that agent.
+
+Output ONE paragraph, 50 to 90 words, covering: approximate age range, gender expression, ethnicity (pick plausibly — vary across briefs, avoid defaulting to one archetype), hair (color, length, style), face (expression, warmth level), attire (smart-casual or business, specific colors/textures), and overall vibe. Keep it specific and plausible — a real professional you might meet.
+
+Do NOT invent a different name, do NOT describe accessories that read as childish (costumes, glitter, props), do NOT mention text/logos. Output the paragraph only — no preamble, no list, no quotes.`;
+
+const IMAGE_STYLE_SUFFIX =
+  "Professional LinkedIn-style headshot photograph, DSLR, 85mm lens, shallow depth of field, natural skin texture, soft studio lighting with gentle rim light, sharp focus on the eyes, head and shoulders composition framed from mid-chest up with the face occupying roughly 40% of the frame, direct eye contact with camera, neutral light-gray studio backdrop, smart-casual business attire, warm subtle closed-mouth smile, photorealistic, natural colors. " +
+  "Negative: no illustration, no cartoon, no anime, no 3D render, no CGI, no painting, no stylization, no text, no watermark, no logo, no glasses unless specified, no costumes.";
+
+export async function buildAvatarPrompt(name: string, soul: string): Promise<string> {
+  const openai = getOpenAI();
+  const soulSnippet = soul.trim().slice(0, 1000);
+  const brief = await openai.chat.completions.create({
+    model: "gpt-5.4",
+    messages: [
+      { role: "system", content: PORTRAIT_BRIEF_SYSTEM },
+      { role: "user", content: `Agent name: ${name}\n\nSOUL:\n${soulSnippet}` },
+    ],
+  });
+  const portraitBrief = brief.choices[0]?.message?.content?.trim();
+  if (!portraitBrief) {
+    throw new Error("Portrait brief generation returned empty content");
+  }
+  log.info(`Portrait brief for ${name}: ${portraitBrief}`);
+  return `${portraitBrief}\n\n${IMAGE_STYLE_SUFFIX}`;
 }
 
 export function createRealAvatarGenerator(): AvatarGenerator {

@@ -2,85 +2,110 @@ import { describe, expect, it } from "vitest";
 import { buildHtmlSignature, buildTextSignature } from "./signature";
 
 describe("buildTextSignature", () => {
-  it("emits the standard sig delimiter with name and description", () => {
+  it("renders name, role · company, and website when all set", () => {
     const text = buildTextSignature({
-      displayName: "Emma P.",
-      description: "Inbox concierge for the Smith household.",
+      displayName: "Emma N.",
+      description: "Personal Assistant",
       profileImageUrl: null,
+      companyName: "Example Co",
+      companyWebsite: "example.test",
     });
 
-    expect(text).toBe("\n\n-- \nEmma P.\nInbox concierge for the Smith household.\n");
+    expect(text).toBe(
+      "\n\n-- \nEmma N.\nPersonal Assistant · Example Co\nw  example.test\n",
+    );
   });
 
-  it("omits the description line when description is null", () => {
+  it("renders just the name when no other fields set", () => {
     const text = buildTextSignature({
-      displayName: "Emma P.",
+      displayName: "Emma N.",
       description: null,
       profileImageUrl: null,
     });
 
-    expect(text).toBe("\n\n-- \nEmma P.\n");
+    expect(text).toBe("\n\n-- \nEmma N.\n");
   });
 
-  it("treats whitespace-only descriptions as missing", () => {
+  it("strips the protocol from companyWebsite", () => {
     const text = buildTextSignature({
-      displayName: "Emma P.",
-      description: "   ",
+      displayName: "Emma",
+      description: null,
+      profileImageUrl: null,
+      companyWebsite: "https://example.test/",
+    });
+
+    expect(text).toContain("w  example.test\n");
+    expect(text).not.toContain("https://");
+  });
+
+  it("omits company portion of subtitle when only role is set", () => {
+    const text = buildTextSignature({
+      displayName: "Emma",
+      description: "Personal Assistant",
       profileImageUrl: null,
     });
 
-    expect(text).toBe("\n\n-- \nEmma P.\n");
+    expect(text).toContain("Personal Assistant\n");
+    expect(text).not.toContain(" · ");
   });
 });
 
 describe("buildHtmlSignature", () => {
-  it("includes an <img> tag when profileImageUrl is set", () => {
+  it("includes the round <img>, subtitle, divider, and website link when all fields set", () => {
     const html = buildHtmlSignature({
-      displayName: "Emma P.",
-      description: "Inbox concierge for the Smith household.",
-      profileImageUrl: "https://pub-example.test/pfps/agent-1.png",
+      displayName: "Emma N.",
+      description: "Personal Assistant",
+      profileImageUrl: "https://pub-example.test/pfps/emma.png",
+      companyName: "Example Co",
+      companyWebsite: "example.test",
     });
 
-    expect(html).toContain('src="https://pub-example.test/pfps/agent-1.png"');
-    expect(html).toContain('alt="Emma P."');
-    expect(html).toContain("Emma P.");
-    expect(html).toContain("Inbox concierge for the Smith household.");
+    expect(html).toContain('src="https://pub-example.test/pfps/emma.png"');
+    expect(html).toContain('alt="Emma N."');
+    expect(html).toContain("Emma N.");
+    expect(html).toContain("Personal Assistant · Example Co");
+    expect(html).toContain('href="https://example.test"');
+    expect(html).toContain(">example.test<");
     expect(html).toContain("<table");
   });
 
-  it("omits the <img> tag when profileImageUrl is null but still renders text", () => {
+  it("omits the <img> cell when profileImageUrl is null", () => {
     const html = buildHtmlSignature({
-      displayName: "Emma P.",
-      description: "Inbox concierge for the Smith household.",
+      displayName: "Emma",
+      description: null,
       profileImageUrl: null,
     });
 
     expect(html).not.toContain("<img");
-    expect(html).toContain("Emma P.");
-    expect(html).toContain("Inbox concierge for the Smith household.");
+    expect(html).toContain("Emma");
   });
 
-  it("omits the description div when description is null", () => {
+  it("omits the website row (and its divider) when companyWebsite is null", () => {
     const html = buildHtmlSignature({
-      displayName: "Emma P.",
-      description: null,
-      profileImageUrl: "https://pub-example.test/pfps/agent-1.png",
+      displayName: "Emma",
+      description: "Personal Assistant",
+      profileImageUrl: null,
+      companyName: "Example Co",
     });
 
-    expect(html).not.toContain('margin-top:2px;">');
-    expect(html).toContain("Emma P.");
+    expect(html).not.toContain("href=");
+    expect(html).not.toContain("background:#e5e7eb");
+    expect(html).toContain("Personal Assistant · Example Co");
   });
 
-  it("escapes HTML-special characters in all fields", () => {
+  it("escapes HTML-special characters in rendered fields", () => {
     const html = buildHtmlSignature({
       displayName: "A & B <test>",
-      description: "Line with <script>alert('x')</script>",
+      description: "Role <x>",
       profileImageUrl: "https://pub-example.test/pfps/a&b.png",
+      companyName: "Co & Co",
+      companyWebsite: "co&co.test",
     });
 
     expect(html).toContain("A &amp; B &lt;test&gt;");
-    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("Role &lt;x&gt; · Co &amp; Co");
     expect(html).toContain("a&amp;b.png");
-    expect(html).not.toContain("<script>");
+    expect(html).toContain("co&amp;co.test");
+    expect(html).not.toContain("<test>");
   });
 });

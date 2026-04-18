@@ -22,6 +22,7 @@
     "db:migrate:reset": "dotenv -e .env -- pnpm --filter @summon/shared db:migrate:reset",
     "db:migrate:status": "dotenv -e .env -- pnpm --filter @summon/shared db:migrate:status",
     "db:studio": "dotenv -e .env -- pnpm --filter @summon/shared db:studio",
+    "backfill:signatures": "dotenv -e .env -- pnpm --filter @summon/web backfill:signatures",
     "build": "pnpm -r build",
     "test": "pnpm test:unit && pnpm test:integration && pnpm test:workflow",
     "test:unit": "dotenv -e .env.test -- vitest run --project unit",
@@ -48,7 +49,8 @@
       "@swc/core",
       "esbuild",
       "prisma",
-      "protobufjs"
+      "protobufjs",
+      "sharp"
     ]
   }
 }
