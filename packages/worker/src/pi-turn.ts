@@ -107,6 +107,8 @@ export async function runPiAgentTurnImpl(
         displayName: agent.signatureDisplayName,
         description: agent.signatureDescription ?? null,
         profileImageUrl: agent.profileImageUrl ?? null,
+        companyName: process.env.COMPANY_NAME?.trim() || null,
+        companyWebsite: process.env.COMPANY_WEBSITE?.trim() || null,
       }
     : null;
 
