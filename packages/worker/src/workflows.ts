@@ -22,6 +22,11 @@ import {
   SCHEDULE_RUNTIME_MEMO_KEY as SCHEDULE_RUNTIME_MEMO_KEY_NAME,
   TASK_RUNTIME_MEMO_KEY as TASK_RUNTIME_MEMO_KEY_NAME,
 } from "@summon/shared/types";
+import {
+  normalizeReflectionTimestamp,
+  reflectionIsDue,
+  timeUntilNextReflection,
+} from "./reflection-schedule";
 
 interface Activities {
   loadTaskFromDb(taskId: string): Promise<{ taskId: string; agentId: string; status: string; isRoot: boolean }>;
@@ -175,6 +180,7 @@ function buildTaskMemoSnapshot(input: {
   turnNumber: number;
   lastStopReason: string | null;
   nextWakeAt: string | null;
+  lastReflectionAt: string | null;
   pendingEmailCount: number;
   pendingOwnerCount: number;
   pendingScheduleCount: number;
@@ -189,6 +195,7 @@ function buildTaskMemoSnapshot(input: {
     turnNumber: input.turnNumber,
     lastStopReason: input.lastStopReason,
     nextWakeAt: input.nextWakeAt,
+    lastReflectionAt: input.lastReflectionAt,
     pendingEmailCount: input.pendingEmailCount,
     pendingOwnerCount: input.pendingOwnerCount,
     pendingScheduleCount: input.pendingScheduleCount,
@@ -241,31 +248,6 @@ async function insertPromptMessagesForTurn(
   });
 }
 
-const REFLECTION_HOUR_LOCAL = 3;
-
-function nextReflectionDueAt(lastReflectionAt: Date | null): Date {
-  const now = new Date();
-  const today = new Date(now);
-  today.setHours(REFLECTION_HOUR_LOCAL, 0, 0, 0);
-
-  if (!lastReflectionAt) {
-    return now.getTime() < today.getTime() ? today : now;
-  }
-
-  if (lastReflectionAt.getTime() >= today.getTime()) {
-    return new Date(today.getTime() + DAY_MS);
-  }
-  return now.getTime() < today.getTime() ? today : now;
-}
-
-function timeUntilNextReflection(lastReflectionAt: Date | null): number {
-  return Math.max(0, nextReflectionDueAt(lastReflectionAt).getTime() - Date.now());
-}
-
-function reflectionIsDue(lastReflectionAt: Date | null): boolean {
-  return timeUntilNextReflection(lastReflectionAt) === 0;
-}
-
 function buildReflectionActionNow(accumulatedDigest: string): string {
   const digestBlock = accumulatedDigest.trim()
     ? accumulatedDigest.trim()
@@ -298,7 +280,7 @@ async function processReflectionChain(
   agentId: string,
   turnState: { turnNumber: number; lastStopReason: string | null },
   setRunningState: () => Promise<void>,
-  lastReflectionAt: { value: Date | null },
+  lastReflectionAt: { value: string | null },
 ): Promise<DecisionResult | null> {
   const gate = await runActivityGate(agentId, 24);
 
@@ -312,7 +294,7 @@ async function processReflectionChain(
     });
     await updateTurnLogReflection(turnLogId, `no material activity in 24h — skipped (${gate.summary})`);
     await updateTurnLogStopReason(turnLogId, "sleeping_phase_no_delta");
-    lastReflectionAt.value = new Date();
+    lastReflectionAt.value = new Date().toISOString();
     return null;
   }
 
@@ -326,14 +308,15 @@ async function processReflectionChain(
       priorDigest = childDigest;
     } catch (err) {
       turnState.turnNumber++;
-      const errTurnLogId = await insertTurnLog(childTaskId, {
+      const errTurnLogId = await insertTurnLog(rootTaskId, {
         turnNumber: turnState.turnNumber,
         fromState: "SLEEPING",
         toState: "SLEEPING",
         trigger: "sleeping_phase_child_error",
       });
       const message = err instanceof Error ? err.message : String(err);
-      await updateTurnLogStopReason(errTurnLogId, `child reflection failed: ${message}`);
+      accumulatedDigest += `\n\n### task:${childTaskId}\n(child reflection failed: ${message})`;
+      await updateTurnLogStopReason(errTurnLogId, `child reflection failed for ${childTaskId}: ${message}`);
     }
   }
 
@@ -354,7 +337,7 @@ async function processReflectionChain(
     turnState,
     setRunningState,
   });
-  lastReflectionAt.value = new Date();
+  lastReflectionAt.value = new Date().toISOString();
   return decision;
 }
 
@@ -452,7 +435,9 @@ export async function taskWorkflow(
     turnNumber: resumeInput?.resumedFrom?.turnNumber ?? 0,
     lastStopReason: resumeInput?.resumedFrom?.lastStopReason ?? null as string | null,
   };
-  const lastReflectionAt: { value: Date | null } = { value: null };
+  const lastReflectionAt: { value: string | null } = {
+    value: normalizeReflectionTimestamp(resumeInput?.resumedFrom?.lastReflectionAt),
+  };
 
   setHandler(onEmailSignal, (email: InboundEmail) => {
     emailQueue.push(email);
@@ -482,6 +467,7 @@ export async function taskWorkflow(
       turnNumber: turnState.turnNumber,
       lastStopReason: turnState.lastStopReason,
       nextWakeAt: runtimeState.nextWakeAt,
+      lastReflectionAt: lastReflectionAt.value,
       pendingEmailCount: emailQueue.length,
       pendingOwnerCount: ownerQueue.length,
       pendingScheduleCount: scheduleQueue.length,
@@ -685,7 +671,7 @@ async function activeLoop(
   ownerQueue: string[],
   turnState: { turnNumber: number; lastStopReason: string | null },
   initialDecision: DecisionResult,
-  lastReflectionAt: { value: Date | null },
+  lastReflectionAt: { value: string | null },
   runtime: {
     persistRuntime: () => void;
     setRunningState: () => Promise<void>;
@@ -701,8 +687,9 @@ async function activeLoop(
 
   while (true) {
     const baseSleepMs = decision.sleepDurationMs ?? DAY_MS;
+    const now = new Date();
     const reflectionBoundMs = isRoot
-      ? timeUntilNextReflection(lastReflectionAt.value)
+      ? timeUntilNextReflection(now, lastReflectionAt.value)
       : Number.POSITIVE_INFINITY;
     const sleepMs = Math.min(baseSleepMs, reflectionBoundMs);
 
@@ -719,7 +706,7 @@ async function activeLoop(
       emailQueue.length === 0 &&
       ownerQueue.length === 0 &&
       scheduleQueue.length === 0 &&
-      reflectionIsDue(lastReflectionAt.value)
+      reflectionIsDue(new Date(), lastReflectionAt.value)
     ) {
       const reflectionDecision = await processReflectionChain(
         taskId,
@@ -887,7 +874,7 @@ async function dormantLoop(
   scheduleQueue: ScheduleEvent[],
   ownerQueue: string[],
   turnState: { turnNumber: number; lastStopReason: string | null },
-  lastReflectionAt: { value: Date | null },
+  lastReflectionAt: { value: string | null },
   persistRuntime: () => void,
   setRunningState: () => Promise<void>,
   setCompletedState: (phase?: TaskWorkflowPhase) => Promise<void>,

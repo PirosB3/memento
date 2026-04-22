@@ -83,6 +83,7 @@ function parseTaskRuntimeSnapshot(input: unknown): TaskWorkflowRuntimeSnapshot |
     turnNumber: typeof input.turnNumber === "number" ? input.turnNumber : 0,
     lastStopReason: typeof input.lastStopReason === "string" ? input.lastStopReason : null,
     nextWakeAt: typeof input.nextWakeAt === "string" ? input.nextWakeAt : null,
+    lastReflectionAt: typeof input.lastReflectionAt === "string" ? input.lastReflectionAt : null,
     pendingEmailCount: typeof input.pendingEmailCount === "number" ? input.pendingEmailCount : 0,
     pendingOwnerCount: typeof input.pendingOwnerCount === "number" ? input.pendingOwnerCount : 0,
     pendingScheduleCount: typeof input.pendingScheduleCount === "number" ? input.pendingScheduleCount : 0,
@@ -201,10 +202,39 @@ async function fallbackResumeSnapshot(
     turnNumber: lastLog?.turnNumber ?? 0,
     lastStopReason: lastLog?.stopReason ?? null,
     nextWakeAt: null,
+    lastReflectionAt: null,
     pendingEmailCount: 0,
     pendingOwnerCount: 0,
     pendingScheduleCount: 0,
   };
+}
+
+async function deriveRootLastReflectionAt(
+  taskId: string,
+  deps: WebServiceDependencies,
+): Promise<string | null> {
+  const lastReflectionLog = await deps.db.agentTurnLog.findFirst({
+    where: {
+      taskId,
+      trigger: { in: ["sleeping_phase", "sleeping_phase_no_delta"] },
+    },
+    orderBy: { timestamp: "desc" },
+  });
+
+  return lastReflectionLog?.timestamp?.toISOString() ?? null;
+}
+
+async function hydrateRootReflectionState(
+  snapshot: TaskWorkflowRuntimeSnapshot,
+  task: WorkflowTaskRecord,
+  deps: WebServiceDependencies,
+): Promise<TaskWorkflowRuntimeSnapshot> {
+  if (!task.isRoot || snapshot.lastReflectionAt) {
+    return snapshot;
+  }
+
+  const lastReflectionAt = await deriveRootLastReflectionAt(task.taskId, deps);
+  return lastReflectionAt ? { ...snapshot, lastReflectionAt } : snapshot;
 }
 
 async function stopPendingSchedulesForTask(
@@ -282,8 +312,9 @@ async function restartSingleTaskWorkflow(
     ? await describeWorkflow(workflowId, deps, task.temporalRunId)
     : await describeWorkflow(workflowId, deps);
 
-  const resumedFrom = parseTaskRuntimeSnapshot(recorded?.memo?.[TASK_RUNTIME_MEMO_KEY])
+  const resumedFromSnapshot = parseTaskRuntimeSnapshot(recorded?.memo?.[TASK_RUNTIME_MEMO_KEY])
     ?? await fallbackResumeSnapshot(task, deps);
+  const resumedFrom = await hydrateRootReflectionState(resumedFromSnapshot, task, deps);
 
   const resumeInput: TaskWorkflowResumeInput = {
     resumedFrom,

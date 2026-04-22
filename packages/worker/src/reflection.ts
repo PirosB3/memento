@@ -7,6 +7,14 @@ import path from "path";
 const log = createLogger("reflection");
 const AGENTS_DIR = getAgentsDir();
 
+function reverseCopy<T>(items: T[]): T[] {
+  const reversed: T[] = [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    reversed.push(items[index]!);
+  }
+  return reversed;
+}
+
 const REFLECTION_SYSTEM_PROMPT = `You write short wake reflections for an AI email agent.
 
 Return 2-4 concise sentences.
@@ -116,18 +124,14 @@ export async function runChildReflectionStepImpl(
     take: 30,
   });
 
-  const turnSummary = recentTurns
-    .slice()
-    .reverse()
+  const turnSummary = reverseCopy(recentTurns)
     .map(
       (t) =>
         `  - turn ${t.turnNumber}: ${t.fromState}→${t.toState} trigger=${t.trigger} stopReason=${t.stopReason ?? "n/a"}`,
     )
     .join("\n");
 
-  const conversationExcerpt = recentMessages
-    .slice()
-    .reverse()
+  const conversationExcerpt = reverseCopy(recentMessages)
     .map((m) => {
       try {
         const parsed = JSON.parse(m.message);
