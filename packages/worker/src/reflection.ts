@@ -24,15 +24,15 @@ Return 2-4 concise sentences.
 
 Do not repeat the prompt verbatim. Do not invent facts beyond the supplied context.`;
 
-const CHILD_REFLECTION_SYSTEM_PROMPT = `You write a structured reflection digest for a child task of an AI email agent, as one node in a nightly daisy-chain reflection.
+const CHILD_REFLECTION_SYSTEM_PROMPT = `You write a structured reflection digest for a child task of an AI email agent.
 
-Given the child task's recent activity and any prior digest from earlier tasks in tonight's chain, produce a compact markdown digest with these sections:
+Given the child task's recent activity, produce a compact markdown digest with these sections:
 - **Material events** — what actually happened that matters
 - **Successes** — what worked well
 - **Frictions / uncertainties** — what went wrong or felt unclear
 - **Candidate learnings for the root agent** — concrete, behavior-changing insights
 
-Keep it to 6-10 bullets total across all sections. Be specific. Avoid vague platitudes. Do not repeat points already covered in the prior digest.`;
+Keep it to 6-10 bullets total across all sections. Be specific. Avoid vague platitudes.`;
 
 export async function runReflectionImpl(
   taskId: string,
@@ -104,11 +104,8 @@ Write a short wake reflection for the main turn.`;
 
 export async function runChildReflectionStepImpl(
   childTaskId: string,
-  priorDigest: string,
 ): Promise<string> {
-  log.info(`Running child reflection step: task=${childTaskId}`, {
-    priorDigestLen: priorDigest.length,
-  });
+  log.info(`Running child reflection step: task=${childTaskId}`);
 
   const task = await prisma.task.findUniqueOrThrow({ where: { taskId: childTaskId } });
 
@@ -155,9 +152,6 @@ ${turnSummary || "(none)"}
 
 ## Recent Conversation (last ${recentMessages.length} messages)
 ${conversationExcerpt || "(none)"}
-
-## Prior Digest (from earlier tasks in tonight's chain)
-${priorDigest.trim() || "(none — you are the first task in tonight's chain)"}
 
 Write the reflection digest.`;
 

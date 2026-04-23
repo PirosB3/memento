@@ -69,7 +69,7 @@ interface Activities {
     rootTurnCount: number;
     summary: string;
   }>;
-  runChildReflectionStep(childTaskId: string, priorDigest: string): Promise<string>;
+  runChildReflectionStep(childTaskId: string): Promise<string>;
 }
 
 const {
@@ -255,7 +255,7 @@ function buildReflectionActionNow(accumulatedDigest: string): string {
 
   return `You are in sleeping-phase reflection mode. You are not doing task work. You are learning from the last 24h.
 
-## ACCUMULATED REFLECTION DIGEST (from child tasks, oldest-activity first)
+## PER-CHILD REFLECTION DIGESTS (oldest activity first)
 ${digestBlock}
 
 ## YOUR REFLECTION TURN
@@ -298,26 +298,39 @@ async function processReflectionChain(
     return null;
   }
 
+  const childIds = gate.activeChildTaskIds;
+  const settled = await Promise.all(
+    childIds.map(async (childTaskId) => {
+      try {
+        const digest = await runChildReflectionStep(childTaskId);
+        return { childTaskId, ok: true as const, digest };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { childTaskId, ok: false as const, message };
+      }
+    }),
+  );
+
   let accumulatedDigest = "";
-  let priorDigest = "";
-  for (const childTaskId of gate.activeChildTaskIds) {
-    try {
-      const childDigest = await runChildReflectionStep(childTaskId, priorDigest);
-      const block = `\n\n### task:${childTaskId}\n${childDigest}`;
-      accumulatedDigest += block;
-      priorDigest = childDigest;
-    } catch (err) {
-      turnState.turnNumber++;
-      const errTurnLogId = await insertTurnLog(rootTaskId, {
-        turnNumber: turnState.turnNumber,
-        fromState: "SLEEPING",
-        toState: "SLEEPING",
-        trigger: "sleeping_phase_child_error",
-      });
-      const message = err instanceof Error ? err.message : String(err);
-      accumulatedDigest += `\n\n### task:${childTaskId}\n(child reflection failed: ${message})`;
-      await updateTurnLogStopReason(errTurnLogId, `child reflection failed for ${childTaskId}: ${message}`);
-    }
+  for (const r of settled) {
+    accumulatedDigest += r.ok
+      ? `\n\n### task:${r.childTaskId}\n${r.digest}`
+      : `\n\n### task:${r.childTaskId}\n(child reflection failed: ${r.message})`;
+  }
+
+  for (const r of settled) {
+    if (r.ok) continue;
+    turnState.turnNumber++;
+    const errTurnLogId = await insertTurnLog(rootTaskId, {
+      turnNumber: turnState.turnNumber,
+      fromState: "SLEEPING",
+      toState: "SLEEPING",
+      trigger: "sleeping_phase_child_error",
+    });
+    await updateTurnLogStopReason(
+      errTurnLogId,
+      `child reflection failed for ${r.childTaskId}: ${r.message}`,
+    );
   }
 
   const reflectionWake: WakeDetails = {

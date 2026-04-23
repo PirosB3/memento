@@ -560,11 +560,10 @@ export async function runActivityGate(
 
 export async function runChildReflectionStep(
   childTaskId: string,
-  priorDigest: string,
 ): Promise<string> {
   log.info(`Running child reflection step: task=${childTaskId}`);
   try {
-    const digest = await runChildReflectionStepImpl(childTaskId, priorDigest);
+    const digest = await runChildReflectionStepImpl(childTaskId);
     log.info(`Child reflection step completed: task=${childTaskId} digestLen=${digest.length}`);
     return digest;
   } catch (err) {
