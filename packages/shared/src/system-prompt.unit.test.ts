@@ -11,6 +11,7 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("The context seed message contains the stable agent/task snapshot.");
     expect(promptA).not.toContain("Avery");
     expect(promptA).not.toContain("owner@example.com");
+    expect(promptA).not.toContain("## AVAILABLE SKILLS");
   });
 
   it("returns a static child prompt", () => {
@@ -24,5 +25,17 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("ESCALATE OVER SILENCE");
     expect(promptA).toContain("Never quit work silently.");
     expect(promptA).not.toContain("avery+abc123@agentmail.test");
+    expect(promptA).not.toContain("## AVAILABLE SKILLS");
+  });
+
+  it("injects an available skills manifest after skill management guidance", () => {
+    const prompt = buildSystemPrompt(
+      false,
+      "## AVAILABLE SKILLS\n- gws: Use Google Workspace. (path: shared/skills/gws/SKILL.md)",
+    );
+
+    expect(prompt).toContain("Never install into shared/ and never use global install flags.\n\n## AVAILABLE SKILLS");
+    expect(prompt).toContain("- gws: Use Google Workspace. (path: shared/skills/gws/SKILL.md)");
+    expect(prompt).toContain("## PYTHON WORK");
   });
 });
