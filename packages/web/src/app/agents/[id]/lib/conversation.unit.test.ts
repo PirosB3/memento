@@ -12,6 +12,7 @@ function buildConversationRow(
       content: "Default message",
     }),
     timestamp: "2026-04-11T12:00:00.000Z",
+    orderingKey: "019dc00a-0000-7000-8000-000000000000",
     ...overrides,
   };
 }

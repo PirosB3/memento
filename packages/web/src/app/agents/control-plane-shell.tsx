@@ -25,6 +25,7 @@ import {
   summarizeToolArgs,
   type DisplayBlock,
 } from "./[id]/lib/conversation";
+import { mergeOverlay, useTurnStream } from "./[id]/lib/use-turn-stream";
 import ControlPlaneNewTaskForm from "./control-plane-new-task-form";
 import type {
   ControlPlaneAgentSummaryView,
@@ -272,7 +273,12 @@ function ChatTranscript({
   task: ControlPlaneSelectedTaskView;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const blocks = useMemo(() => buildDisplayBlocks(task.detail.conversations), [task.detail.conversations]);
+  const { pendingOverlay } = useTurnStream(agent.agentId, task.detail.taskId);
+  const merged = useMemo(
+    () => mergeOverlay(task.detail.conversations, pendingOverlay),
+    [task.detail.conversations, pendingOverlay],
+  );
+  const blocks = useMemo(() => buildDisplayBlocks(merged.conversations), [merged.conversations]);
 
   useEffect(() => {
     const element = scrollRef.current;

@@ -3,6 +3,7 @@ export type ConversationRow = {
   role: string;
   message: string;
   timestamp: string;
+  orderingKey: string;
 };
 
 export type TurnLogRow = {

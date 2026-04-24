@@ -5,7 +5,9 @@ import {
   SIGNAL_SCHEDULE,
   getTemporalAddress,
   getAgentsDir,
+  publishTurnSnapshot,
 } from "@summon/shared";
+import { uuidv7 } from "uuidv7";
 import type { DecisionResult, AgentStatus, TaskStatus, TaskInfo } from "@summon/shared";
 import { runPiAgentTurnImpl } from "./pi-turn.js";
 import { runReflectionImpl, runChildReflectionStepImpl } from "./reflection.js";
@@ -248,7 +250,11 @@ export async function insertConversationMessage(
       taskId,
       role: msg.role,
       message: JSON.stringify({ role: msg.role, content: msg.content, timestamp: Date.now() }),
+      orderingKey: uuidv7(),
     },
+  });
+  await publishTurnSnapshot(taskId, []).catch((err) => {
+    log.warn(`publishTurnSnapshot after insertConversationMessage failed: ${String(err)}`);
   });
 }
 
@@ -356,7 +362,11 @@ Source: root task wake
 ${message}`,
         timestamp: Date.now(),
       }),
+      orderingKey: uuidv7(),
     },
+  });
+  await publishTurnSnapshot(taskId, []).catch((err) => {
+    log.warn(`publishTurnSnapshot after wakeTask failed: ${String(err)}`);
   });
 
   // Signal the child workflow to wake

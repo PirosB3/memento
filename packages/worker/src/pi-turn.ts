@@ -4,9 +4,10 @@ import {
   convertResponsesMessages,
   convertResponsesTools,
 } from "../../../repos/pi-mono/packages/ai/dist/providers/openai-responses-shared.js";
-import { prisma, buildSystemPrompt, createLogger, getAgentsDir } from "@summon/shared";
-import type { AgentSignature, DecisionResult } from "@summon/shared";
+import { prisma, buildSystemPrompt, createLogger, getAgentsDir, publishTurnSnapshot } from "@summon/shared";
+import type { AgentSignature, DecisionResult, PendingMessage } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
+import { uuidv7 } from "uuidv7";
 import {
   compactTaskContext,
   estimateMessagesTokens,
@@ -277,13 +278,91 @@ export async function runPiAgentTurnImpl(
     },
   });
 
-  // 10. Subscribe to events for logging
-  piAgent.subscribe((event) => {
-    if (event.type === "tool_execution_start") {
-      taskLog.info(`Tool call started: ${event.toolName}`);
+  // 10. Subscribe to events: log tool execution + maintain a pending-messages
+  //     buffer that gets published to SSE subscribers via pg_notify while the
+  //     turn is in flight. Pi emits cloned assistant messages while streaming,
+  //     so keep stable slots independent from event object identity.
+  type PendingSlot = { orderingKey: string; message: AgentMessage };
+  const pendingOrder: PendingSlot[] = [];
+  const committedOrderingKeys = new WeakMap<AgentMessage, string>();
+  let activeAssistantSlot: PendingSlot | null = null;
+  let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastPublishMs = 0;
+  const PUBLISH_THROTTLE_MS = 50;
+
+  function buildSnapshot(): PendingMessage[] {
+    return pendingOrder.map((slot) => ({
+      orderingKey: slot.orderingKey,
+      role: slot.message.role,
+      message: slot.message,
+    }));
+  }
+
+  function flushPublish(): void {
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
     }
-    if (event.type === "tool_execution_end") {
-      taskLog.info(`Tool call ended: ${event.toolName} (error: ${event.isError})`);
+    lastPublishMs = Date.now();
+    const snapshot = buildSnapshot();
+    // Fire-and-forget: NOTIFY round-trips must not block Pi's event loop, which
+    // fires deltas at 30–60 Hz during token streaming.
+    publishTurnSnapshot(taskId, snapshot).catch((err) => {
+      taskLog.warn(`publishTurnSnapshot failed: ${String(err)}`);
+    });
+  }
+
+  function schedulePublish(immediate: boolean): void {
+    if (immediate) {
+      flushPublish();
+      return;
+    }
+    if (throttleTimer) return;
+    const elapsed = Date.now() - lastPublishMs;
+    const wait = Math.max(0, PUBLISH_THROTTLE_MS - elapsed);
+    throttleTimer = setTimeout(() => {
+      throttleTimer = null;
+      flushPublish();
+    }, wait);
+  }
+
+  piAgent.subscribe((event) => {
+    switch (event.type) {
+      case "message_start": {
+        const slot = { orderingKey: uuidv7(), message: event.message };
+        pendingOrder.push(slot);
+        if (event.message.role === "assistant") {
+          activeAssistantSlot = slot;
+        }
+        schedulePublish(true);
+        break;
+      }
+      case "message_update":
+        if (activeAssistantSlot) {
+          activeAssistantSlot.message = event.message;
+        }
+        schedulePublish(false);
+        break;
+      case "message_end":
+        if (activeAssistantSlot && event.message.role === "assistant") {
+          activeAssistantSlot.message = event.message;
+          committedOrderingKeys.set(event.message, activeAssistantSlot.orderingKey);
+          activeAssistantSlot = null;
+        } else {
+          const slot = pendingOrder[pendingOrder.length - 1];
+          if (slot) {
+            slot.message = event.message;
+            committedOrderingKeys.set(event.message, slot.orderingKey);
+          }
+        }
+        schedulePublish(true);
+        break;
+      case "tool_execution_start":
+        taskLog.info(`Tool call started: ${event.toolName}`);
+        break;
+      case "tool_execution_end":
+        taskLog.info(`Tool call ended: ${event.toolName} (error: ${event.isError})`);
+        break;
     }
   });
 
@@ -295,6 +374,15 @@ export async function runPiAgentTurnImpl(
     taskLog.info("Pi agent turn execution completed");
   } catch (error) {
     taskLog.error("Pi agent turn execution failed", error);
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
+    }
+    try {
+      await publishTurnSnapshot(taskId, []);
+    } catch (notifyErr) {
+      taskLog.warn(`Failed to clear overlay after turn error: ${String(notifyErr)}`);
+    }
     return {
       type: "fail",
       stopReason: `Agent turn failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -302,13 +390,33 @@ export async function runPiAgentTurnImpl(
     };
   }
 
-  // 12. Persist new messages to DB
+  // 12. Persist new messages to DB — single createMany so the ordering_key
+  //     watermark jumps past the entire turn atomically from a reader's view.
+  if (throttleTimer) {
+    clearTimeout(throttleTimer);
+    throttleTimer = null;
+  }
   const newMessages = piAgent.state.messages.slice(initialMessageCount);
   taskLog.info(`Persisting ${newMessages.length} new messages to DB`);
-  for (const msg of newMessages) {
-    await prisma.conversation.create({
-      data: { taskId, role: msg.role, message: JSON.stringify(msg) },
+  if (newMessages.length > 0) {
+    await prisma.conversation.createMany({
+      data: newMessages.map((msg) => ({
+        taskId,
+        role: msg.role,
+        message: JSON.stringify(msg),
+        // Use the buffered ordering key when available. Defensive fallback: if
+        // a message somehow appeared in state.messages without a corresponding
+        // message_start event (shouldn't happen), mint one now.
+        orderingKey: committedOrderingKeys.get(msg) ?? uuidv7(),
+      })),
     });
+  }
+  pendingOrder.length = 0;
+  activeAssistantSlot = null;
+  try {
+    await publishTurnSnapshot(taskId, []);
+  } catch (err) {
+    taskLog.warn(`Final empty publishTurnSnapshot failed: ${String(err)}`);
   }
 
   // 13. Update lastActivityAt

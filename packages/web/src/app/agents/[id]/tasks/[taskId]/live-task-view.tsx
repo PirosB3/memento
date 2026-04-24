@@ -9,6 +9,7 @@ import WakeMessageForm from "../../wake-message-form";
 import WorkflowActionButton from "../../workflow-action-button";
 import { restartTaskAction, stopTaskAction } from "../../actions";
 import { getLatestConversationPreview } from "../../lib/conversation";
+import { mergeOverlay, useTurnStream } from "../../lib/use-turn-stream";
 import { getDisplayedTaskStatus, getStatusBadgeVariant, getStatusDot, isStreamingStatus } from "@/lib/task-status";
 import type { TaskPageView } from "@/lib/view-models/task-view";
 
@@ -80,10 +81,17 @@ export default function LiveTaskView({
 
   const { agentEmail, agentName, task } = taskView;
   const displayedStatus = getDisplayedTaskStatus(task);
-  const isStreaming = isStreamingStatus(task.status, task.workflowStatus);
+  const { pendingOverlay } = useTurnStream(taskView.agentId, task.taskId);
+  const mergedConversations = useMemo(
+    () => mergeOverlay(task.conversations, pendingOverlay),
+    [task.conversations, pendingOverlay],
+  );
+  const isStreaming =
+    mergedConversations.isStreaming ||
+    isStreamingStatus(task.status, task.workflowStatus);
   const latestMessage = useMemo(
-    () => getLatestConversationPreview(task.conversations),
-    [task.conversations],
+    () => getLatestConversationPreview(mergedConversations.conversations),
+    [mergedConversations.conversations],
   );
   const aliasEmail = buildAliasEmail(agentEmail, task.tag);
 
@@ -239,7 +247,7 @@ export default function LiveTaskView({
 
       <div className="bg-card border border-border rounded-xl p-5">
         <ConversationView
-          conversations={task.conversations}
+          conversations={mergedConversations.conversations}
           turnLogs={task.turnLogs}
           isStreaming={isStreaming}
         />
