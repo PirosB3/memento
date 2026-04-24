@@ -17,6 +17,7 @@ import AgentTabs from "./agent-tabs";
 import ConversationView from "./conversation-view";
 import { getDisplayedTaskStatus, getStatusBadgeVariant, getStatusDot, isStreamingStatus } from "@/lib/task-status";
 import type { AgentView } from "@/lib/view-models/task-view";
+import { mergeOverlay, useTurnStream } from "./lib/use-turn-stream";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -64,6 +65,11 @@ export default function LiveAgentView({
   }, [initialAgent.agentId]);
 
   const rootTask = agent.rootTask;
+  const rootTaskIdForStream = rootTask?.taskId ?? "";
+  const { pendingOverlay: rootPendingOverlay } = useTurnStream(
+    agent.agentId,
+    rootTaskIdForStream,
+  );
   const childTasks = agent.tasks;
   const rootWorkflowStatus = rootTask?.workflowStatus ?? "STOPPED";
   const allTasks = rootTask ? [rootTask, ...childTasks] : childTasks;
@@ -171,11 +177,19 @@ export default function LiveAgentView({
           failureMessage="Failed to wake agent."
         />
       )}
-      <ConversationView
-        conversations={rootTask.conversations}
-        turnLogs={rootTask.turnLogs}
-        isStreaming={isStreamingStatus(rootTask.status, rootTask.workflowStatus)}
-      />
+      {(() => {
+        const merged = mergeOverlay(rootTask.conversations, rootPendingOverlay);
+        return (
+          <ConversationView
+            conversations={merged.conversations}
+            turnLogs={rootTask.turnLogs}
+            isStreaming={
+              merged.isStreaming ||
+              isStreamingStatus(rootTask.status, rootTask.workflowStatus)
+            }
+          />
+        );
+      })()}
     </div>
   ) : (
     <p className="text-sm text-muted-foreground">No root task found.</p>

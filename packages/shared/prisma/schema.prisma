@@ -53,6 +53,7 @@ model Task {
   conversations Conversation[]
   turnLogs      AgentTurnLog[]
   schedules     Schedule[]
+  turnSnapshot  TurnSnapshot?
 
   @@index([agentId])
   @@index([tag])
@@ -60,16 +61,28 @@ model Task {
 }
 
 model Conversation {
-  id        Int      @id @default(autoincrement())
-  taskId    String   @map("task_id")
-  role      String
-  message   String
-  timestamp DateTime @default(now())
+  id          Int      @id @default(autoincrement())
+  taskId      String   @map("task_id")
+  role        String
+  message     String
+  timestamp   DateTime @default(now())
+  orderingKey String   @unique @map("ordering_key") @db.Uuid
 
   task Task @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
 
   @@index([taskId, id])
+  @@index([taskId, orderingKey])
   @@map("conversations")
+}
+
+model TurnSnapshot {
+  taskId    String   @id @map("task_id")
+  state     Json
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  task Task @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
+
+  @@map("turn_snapshots")
 }
 
 model AgentTurnLog {

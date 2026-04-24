@@ -19,6 +19,7 @@ type ConversationRecord = {
   role: string;
   message: string;
   timestamp: Date;
+  orderingKey: string;
 };
 
 type TurnLogRecord = {
@@ -96,6 +97,7 @@ export function serializeTaskDetail(
       role: conversation.role,
       message: conversation.message,
       timestamp: conversation.timestamp.toISOString(),
+      orderingKey: conversation.orderingKey,
     })),
     turnLogs: (task.turnLogs ?? []).map((log) => ({
       id: log.id,

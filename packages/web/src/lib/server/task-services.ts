@@ -1,5 +1,6 @@
 import crypto from "crypto";
-import { SIGNAL_OWNER } from "@summon/shared";
+import { SIGNAL_OWNER, publishTurnSnapshot } from "@summon/shared";
+import { uuidv7 } from "uuidv7";
 import { getWebServiceDependencies } from "./dependencies";
 import type { WebServiceDependencies } from "./dependencies";
 import { parseJsonArray } from "./json";
@@ -193,7 +194,12 @@ async function insertImmediateWakeMessage(
         content,
         timestamp: Date.now(),
       }),
+      orderingKey: uuidv7(),
     },
+  });
+  await publishTurnSnapshot(taskId, []).catch(() => {
+    // Best-effort: failure to notify just means a connected SSE client will
+    // pick up the new row on its next 2s poll instead of immediately.
   });
 }
 

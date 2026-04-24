@@ -4,9 +4,10 @@ import {
   convertResponsesMessages,
   convertResponsesTools,
 } from "../../../repos/pi-mono/packages/ai/dist/providers/openai-responses-shared.js";
-import { prisma, buildSystemPrompt, createLogger, getAgentsDir } from "@summon/shared";
-import type { AgentSignature, DecisionResult } from "@summon/shared";
+import { prisma, buildSystemPrompt, createLogger, getAgentsDir, publishTurnSnapshot } from "@summon/shared";
+import type { AgentSignature, DecisionResult, PendingMessage } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
+import { uuidv7 } from "uuidv7";
 import {
   compactTaskContext,
   estimateMessagesTokens,
@@ -277,13 +278,72 @@ export async function runPiAgentTurnImpl(
     },
   });
 
-  // 10. Subscribe to events for logging
-  piAgent.subscribe((event) => {
-    if (event.type === "tool_execution_start") {
-      taskLog.info(`Tool call started: ${event.toolName}`);
+  // 10. Subscribe to events: log tool execution + maintain a pending-messages
+  //     buffer that gets published to SSE subscribers via pg_notify while the
+  //     turn is in flight. Messages are keyed by object reference — Pi mutates
+  //     the same AgentMessage object in place during streaming, so reference
+  //     identity is stable across message_start / message_update / message_end.
+  const pendingBuffer = new Map<AgentMessage, { orderingKey: string }>();
+  const pendingOrder: AgentMessage[] = [];
+  let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastPublishMs = 0;
+  const PUBLISH_THROTTLE_MS = 50;
+
+  function buildSnapshot(): PendingMessage[] {
+    return pendingOrder.map((msg) => ({
+      orderingKey: pendingBuffer.get(msg)!.orderingKey,
+      role: msg.role,
+      message: msg,
+    }));
+  }
+
+  function flushPublish(): void {
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
     }
-    if (event.type === "tool_execution_end") {
-      taskLog.info(`Tool call ended: ${event.toolName} (error: ${event.isError})`);
+    lastPublishMs = Date.now();
+    const snapshot = buildSnapshot();
+    // Fire-and-forget: NOTIFY round-trips must not block Pi's event loop, which
+    // fires deltas at 30–60 Hz during token streaming.
+    publishTurnSnapshot(taskId, snapshot).catch((err) => {
+      taskLog.warn(`publishTurnSnapshot failed: ${String(err)}`);
+    });
+  }
+
+  function schedulePublish(immediate: boolean): void {
+    if (immediate) {
+      flushPublish();
+      return;
+    }
+    if (throttleTimer) return;
+    const elapsed = Date.now() - lastPublishMs;
+    const wait = Math.max(0, PUBLISH_THROTTLE_MS - elapsed);
+    throttleTimer = setTimeout(() => {
+      throttleTimer = null;
+      flushPublish();
+    }, wait);
+  }
+
+  piAgent.subscribe((event) => {
+    switch (event.type) {
+      case "message_start":
+        pendingBuffer.set(event.message, { orderingKey: uuidv7() });
+        pendingOrder.push(event.message);
+        schedulePublish(true);
+        break;
+      case "message_update":
+        schedulePublish(false);
+        break;
+      case "message_end":
+        schedulePublish(true);
+        break;
+      case "tool_execution_start":
+        taskLog.info(`Tool call started: ${event.toolName}`);
+        break;
+      case "tool_execution_end":
+        taskLog.info(`Tool call ended: ${event.toolName} (error: ${event.isError})`);
+        break;
     }
   });
 
@@ -295,6 +355,15 @@ export async function runPiAgentTurnImpl(
     taskLog.info("Pi agent turn execution completed");
   } catch (error) {
     taskLog.error("Pi agent turn execution failed", error);
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
+    }
+    try {
+      await publishTurnSnapshot(taskId, []);
+    } catch (notifyErr) {
+      taskLog.warn(`Failed to clear overlay after turn error: ${String(notifyErr)}`);
+    }
     return {
       type: "fail",
       stopReason: `Agent turn failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -302,13 +371,33 @@ export async function runPiAgentTurnImpl(
     };
   }
 
-  // 12. Persist new messages to DB
+  // 12. Persist new messages to DB — single createMany so the ordering_key
+  //     watermark jumps past the entire turn atomically from a reader's view.
+  if (throttleTimer) {
+    clearTimeout(throttleTimer);
+    throttleTimer = null;
+  }
   const newMessages = piAgent.state.messages.slice(initialMessageCount);
   taskLog.info(`Persisting ${newMessages.length} new messages to DB`);
-  for (const msg of newMessages) {
-    await prisma.conversation.create({
-      data: { taskId, role: msg.role, message: JSON.stringify(msg) },
+  if (newMessages.length > 0) {
+    await prisma.conversation.createMany({
+      data: newMessages.map((msg) => ({
+        taskId,
+        role: msg.role,
+        message: JSON.stringify(msg),
+        // Use the buffered ordering key when available. Defensive fallback: if
+        // a message somehow appeared in state.messages without a corresponding
+        // message_start event (shouldn't happen), mint one now.
+        orderingKey: pendingBuffer.get(msg)?.orderingKey ?? uuidv7(),
+      })),
     });
+  }
+  pendingBuffer.clear();
+  pendingOrder.length = 0;
+  try {
+    await publishTurnSnapshot(taskId, []);
+  } catch (err) {
+    taskLog.warn(`Final empty publishTurnSnapshot failed: ${String(err)}`);
   }
 
   // 13. Update lastActivityAt

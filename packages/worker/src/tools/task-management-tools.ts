@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { prisma, createLogger, TASK_QUEUE, getTemporalAddress } from "@summon/shared";
+import { prisma, createLogger, TASK_QUEUE, getTemporalAddress, publishTurnSnapshot } from "@summon/shared";
+import { uuidv7 } from "uuidv7";
 import type { AgentTool } from "../../pi-types.js";
 import { Client, Connection } from "@temporalio/client";
 import crypto from "crypto";
@@ -108,7 +109,11 @@ Source: root task wake
 ${message}`,
               timestamp: Date.now(),
             }),
+            orderingKey: uuidv7(),
           },
+        });
+        await publishTurnSnapshot(taskId, []).catch((err) => {
+          log.warn(`publishTurnSnapshot after wake_task tool failed: ${String(err)}`);
         });
 
         // Signal the child workflow
