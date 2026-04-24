@@ -150,4 +150,27 @@ describe("control plane view loader", () => {
     expect(view.selectedAgent?.agentId).toBe("agent-1");
     expect(view.selectedTask?.key).toBe("root");
   });
+
+  it("does not fall back to another agent in strict route mode", async () => {
+    const view = await getControlPlaneView(
+      { agentId: "missing-agent", taskKey: "root" },
+      setupControlPlaneDeps(),
+      { fallbackToFirstAgent: false },
+    );
+
+    expect(view.agents).toHaveLength(2);
+    expect(view.selectedAgent).toBeNull();
+    expect(view.selectedTask).toBeNull();
+  });
+
+  it("falls back to the selected agent root task for an invalid task path", async () => {
+    const view = await getControlPlaneView(
+      { agentId: "agent-1", taskKey: "missing-task" },
+      setupControlPlaneDeps(),
+      { fallbackToFirstAgent: false },
+    );
+
+    expect(view.selectedAgent?.agentId).toBe("agent-1");
+    expect(view.selectedTask?.key).toBe("root");
+  });
 });

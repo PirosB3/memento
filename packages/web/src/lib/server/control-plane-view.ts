@@ -15,6 +15,10 @@ type ControlPlaneSelection = {
   taskKey?: string | null;
 };
 
+type ControlPlaneOptions = {
+  fallbackToFirstAgent?: boolean;
+};
+
 function childAliasEmail(agentEmail: string, tag: string): string {
   const [local, domain] = agentEmail.split("@");
   if (!local || !domain) return agentEmail;
@@ -62,7 +66,9 @@ function selectRootTask(agent: AgentView): ControlPlaneSelectedTaskView | null {
 export async function getControlPlaneView(
   selection: ControlPlaneSelection = {},
   deps: WebServiceDependencies = getWebServiceDependencies(),
+  options: ControlPlaneOptions = {},
 ): Promise<ControlPlaneView> {
+  const fallbackToFirstAgent = options.fallbackToFirstAgent ?? true;
   const agentSummaries = await getStoppedAwareAgentList(deps);
   const agents = agentSummaries.map(summarizeAgent);
 
@@ -76,7 +82,9 @@ export async function getControlPlaneView(
 
   const selectedAgentId = agents.some((agent) => agent.agentId === selection.agentId)
     ? selection.agentId
-    : agents[0]?.agentId;
+    : fallbackToFirstAgent
+      ? agents[0]?.agentId
+      : null;
 
   if (!selectedAgentId) {
     return {

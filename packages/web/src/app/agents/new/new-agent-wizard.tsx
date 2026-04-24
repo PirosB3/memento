@@ -2,6 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
+import { controlPlanePath } from "@/lib/control-plane-paths";
 
 import {
   createAgentAction,
@@ -319,7 +320,7 @@ export default function NewAgentWizard() {
           </p>
           <div className="flex gap-3 justify-center mt-6">
             <Link
-              href={`/agents/${agent.agentId}`}
+              href={controlPlanePath(agent.agentId, "root")}
               className="bg-[var(--accent)] text-white px-6 py-2.5 rounded-lg text-sm font-medium hover:brightness-110 transition-all"
             >
               Go to Dashboard

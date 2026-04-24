@@ -5,8 +5,14 @@ import { usePathname } from "next/navigation";
 
 export default function AppNav() {
   const pathname = usePathname();
+  const segments = pathname.split("/").filter(Boolean);
+  const isControlPlanePath = pathname === "/agents" || (
+    segments.length === 2 &&
+    segments[0] !== "agents" &&
+    segments[0] !== "api"
+  );
 
-  if (pathname === "/agents") {
+  if (isControlPlanePath) {
     return null;
   }
 

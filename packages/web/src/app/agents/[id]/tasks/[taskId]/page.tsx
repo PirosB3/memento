@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { controlPlanePath } from "@/lib/control-plane-paths";
 
 interface TaskDetailPageProps {
   params: Promise<{
@@ -9,5 +10,5 @@ interface TaskDetailPageProps {
 
 export default async function TaskDetailPage({ params }: TaskDetailPageProps) {
   const { id, taskId } = await params;
-  redirect(`/agents?agent=${encodeURIComponent(id)}&task=${encodeURIComponent(taskId)}`);
+  redirect(controlPlanePath(id, taskId));
 }

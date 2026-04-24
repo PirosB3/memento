@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import ControlPlaneShell from "./control-plane-shell";
+import { controlPlanePath } from "@/lib/control-plane-paths";
 import { getControlPlaneView } from "@/lib/server/control-plane-view";
 
 export const dynamic = "force-dynamic";
@@ -21,13 +22,7 @@ export default async function AgentsPage({ searchParams }: AgentsPageProps) {
   if (view.selectedAgent && view.selectedTask) {
     const canonicalAgent = view.selectedAgent.agentId;
     const canonicalTask = view.selectedTask.key;
-    if (params.agent !== canonicalAgent || params.task !== canonicalTask) {
-      const canonicalParams = new URLSearchParams({
-        agent: canonicalAgent,
-        task: canonicalTask,
-      });
-      redirect(`/agents?${canonicalParams.toString()}`);
-    }
+    redirect(controlPlanePath(canonicalAgent, canonicalTask));
   }
 
   return <ControlPlaneShell initialView={view} />;

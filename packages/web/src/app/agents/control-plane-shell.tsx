@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   Bot,
   ChevronDown,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import MarkdownBody from "@/components/markdown-body";
 import { Button } from "@/components/ui/button";
+import { controlPlanePath } from "@/lib/control-plane-paths";
 import { cn } from "@/lib/utils";
 import { getDisplayedTaskStatus, getStatusDot } from "@/lib/task-status";
 import {
@@ -453,37 +454,41 @@ function TaskRow({
   );
 }
 
+type ControlPlaneShellSelection = {
+  agentId: string;
+  taskKey: string;
+};
+
 export default function ControlPlaneShell({
   initialView,
+  selection,
 }: {
   initialView: ControlPlaneView;
+  selection?: ControlPlaneShellSelection;
 }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [view, setView] = useState(initialView);
   const [search, setSearch] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
-  const agentParam = searchParams.get("agent");
-  const taskParam = searchParams.get("task");
-
   const fetchView = useCallback(async () => {
+    if (!selection) return;
+
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
 
-    const params = new URLSearchParams();
-    if (agentParam) params.set("agent", agentParam);
-    if (taskParam) params.set("task", taskParam);
-
-    const response = await fetch(`/api/control-plane?${params.toString()}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    });
+    const response = await fetch(
+      `/api/control-plane/${encodeURIComponent(selection.agentId)}/${encodeURIComponent(selection.taskKey)}`,
+      {
+        cache: "no-store",
+        signal: controller.signal,
+      },
+    );
     if (response.ok) {
       setView(await response.json() as ControlPlaneView);
     }
-  }, [agentParam, taskParam]);
+  }, [selection]);
 
   useEffect(() => {
     setView(initialView);
@@ -547,8 +552,7 @@ export default function ControlPlaneShell({
   }, [allTasks, search, selectedAgent, view.agents]);
 
   function selectTask(agentId: string, taskKey: string) {
-    const params = new URLSearchParams({ agent: agentId, task: taskKey });
-    router.push(`/agents?${params.toString()}`, { scroll: false });
+    router.push(controlPlanePath(agentId, taskKey), { scroll: false });
   }
 
   if (view.agents.length === 0) {
