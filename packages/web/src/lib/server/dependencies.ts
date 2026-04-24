@@ -322,11 +322,33 @@ function createFakeWorkflowClient(): WorkflowClient {
     async signalWorkflow() {
       return;
     },
-    async describeWorkflow() {
-      return {};
+    async describeWorkflow(workflowId) {
+      return {
+        runId: `fake-run-${workflowId}`,
+        status: { name: "RUNNING" },
+        memo: {},
+      };
     },
-    async queryWorkflow() {
-      return {} as never;
+    async queryWorkflow(workflowId) {
+      const isRoot = workflowId.startsWith("agent__");
+      const agentId = isRoot
+        ? workflowId.replace(/^agent__/, "").replace(/__root$/, "")
+        : "";
+      const taskId = isRoot ? `root-${agentId}` : workflowId.replace(/^task-/, "");
+      return {
+        schemaVersion: 1,
+        taskId,
+        agentId,
+        isRoot,
+        phase: "SLEEPING",
+        logicalStatus: "SLEEPING",
+        turnNumber: 0,
+        lastStopReason: null,
+        nextWakeAt: null,
+        pendingEmailCount: 0,
+        pendingOwnerCount: 0,
+        pendingScheduleCount: 0,
+      } as never;
     },
   };
 }
