@@ -280,20 +280,21 @@ export async function runPiAgentTurnImpl(
 
   // 10. Subscribe to events: log tool execution + maintain a pending-messages
   //     buffer that gets published to SSE subscribers via pg_notify while the
-  //     turn is in flight. Messages are keyed by object reference — Pi mutates
-  //     the same AgentMessage object in place during streaming, so reference
-  //     identity is stable across message_start / message_update / message_end.
-  const pendingBuffer = new Map<AgentMessage, { orderingKey: string }>();
-  const pendingOrder: AgentMessage[] = [];
+  //     turn is in flight. Pi emits cloned assistant messages while streaming,
+  //     so keep stable slots independent from event object identity.
+  type PendingSlot = { orderingKey: string; message: AgentMessage };
+  const pendingOrder: PendingSlot[] = [];
+  const committedOrderingKeys = new WeakMap<AgentMessage, string>();
+  let activeAssistantSlot: PendingSlot | null = null;
   let throttleTimer: ReturnType<typeof setTimeout> | null = null;
   let lastPublishMs = 0;
   const PUBLISH_THROTTLE_MS = 50;
 
   function buildSnapshot(): PendingMessage[] {
-    return pendingOrder.map((msg) => ({
-      orderingKey: pendingBuffer.get(msg)!.orderingKey,
-      role: msg.role,
-      message: msg,
+    return pendingOrder.map((slot) => ({
+      orderingKey: slot.orderingKey,
+      role: slot.message.role,
+      message: slot.message,
     }));
   }
 
@@ -327,15 +328,33 @@ export async function runPiAgentTurnImpl(
 
   piAgent.subscribe((event) => {
     switch (event.type) {
-      case "message_start":
-        pendingBuffer.set(event.message, { orderingKey: uuidv7() });
-        pendingOrder.push(event.message);
+      case "message_start": {
+        const slot = { orderingKey: uuidv7(), message: event.message };
+        pendingOrder.push(slot);
+        if (event.message.role === "assistant") {
+          activeAssistantSlot = slot;
+        }
         schedulePublish(true);
         break;
+      }
       case "message_update":
+        if (activeAssistantSlot) {
+          activeAssistantSlot.message = event.message;
+        }
         schedulePublish(false);
         break;
       case "message_end":
+        if (activeAssistantSlot && event.message.role === "assistant") {
+          activeAssistantSlot.message = event.message;
+          committedOrderingKeys.set(event.message, activeAssistantSlot.orderingKey);
+          activeAssistantSlot = null;
+        } else {
+          const slot = pendingOrder[pendingOrder.length - 1];
+          if (slot) {
+            slot.message = event.message;
+            committedOrderingKeys.set(event.message, slot.orderingKey);
+          }
+        }
         schedulePublish(true);
         break;
       case "tool_execution_start":
@@ -388,12 +407,12 @@ export async function runPiAgentTurnImpl(
         // Use the buffered ordering key when available. Defensive fallback: if
         // a message somehow appeared in state.messages without a corresponding
         // message_start event (shouldn't happen), mint one now.
-        orderingKey: pendingBuffer.get(msg)?.orderingKey ?? uuidv7(),
+        orderingKey: committedOrderingKeys.get(msg) ?? uuidv7(),
       })),
     });
   }
-  pendingBuffer.clear();
   pendingOrder.length = 0;
+  activeAssistantSlot = null;
   try {
     await publishTurnSnapshot(taskId, []);
   } catch (err) {

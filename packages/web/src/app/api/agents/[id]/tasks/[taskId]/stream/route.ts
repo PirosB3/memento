@@ -31,6 +31,17 @@ export async function GET(
   { params }: StreamRouteContext,
 ): Promise<Response> {
   const { taskId } = await params;
+
+  // Reject unknown task ids up front — otherwise we'd open a pg connection
+  // and LISTEN on a channel that never fires, leaking resources on bad URLs.
+  const task = await prisma.task.findUnique({ where: { taskId }, select: { taskId: true } });
+  if (!task) {
+    return new Response(JSON.stringify({ error: "Task not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const channel = channelForTask(taskId);
 
   // Dedicated pg client per SSE connection: LISTEN binds to a connection, and
@@ -76,13 +87,10 @@ export async function GET(
 
       try {
         await client.connect();
-        await client.query(`LISTEN "${channel}"`);
 
-        // Initial snapshot on connect so late joiners get caught up without
-        // waiting for the next publish.
-        const initial = await readSnapshot(taskId);
-        send({ type: "snapshot", state: initial });
-
+        // Attach the notification listener BEFORE issuing LISTEN so no NOTIFY
+        // can arrive unhandled between LISTEN returning and the listener being
+        // registered.
         client.on("notification", (msg) => {
           if (msg.channel !== channel) return;
           readSnapshot(taskId)
@@ -91,11 +99,17 @@ export async function GET(
               log.warn(`readSnapshot after NOTIFY failed: ${String(err)}`);
             });
         });
-
         client.on("error", (err) => {
           log.warn(`pg client error on stream: ${String(err)}`);
           void cleanup();
         });
+
+        await client.query(`LISTEN "${channel}"`);
+
+        // Initial snapshot on connect so late joiners get caught up without
+        // waiting for the next publish.
+        const initial = await readSnapshot(taskId);
+        send({ type: "snapshot", state: initial });
 
         heartbeat = setInterval(() => send({ type: "heartbeat" }), 25_000);
 

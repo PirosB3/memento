@@ -42,9 +42,21 @@ function toOverlayRow(p: PendingOverlayMessage, idx: number): ConversationRow {
     id: -(idx + 1),
     role: p.role,
     message: JSON.stringify(p.message),
-    timestamp: new Date().toISOString(),
+    timestamp: timestampFromUuidV7(p.orderingKey),
     orderingKey: p.orderingKey,
   };
+}
+
+// UUIDv7 format: xxxxxxxx-xxxx-7xxx-yxxx-xxxxxxxxxxxx
+// First 48 bits = milliseconds since Unix epoch — 12 hex chars skipping the
+// dash at index 8. Extracting the stamp from the key gives a stable timestamp
+// per message (fixed at message_start), so the overlay row doesn't jitter as
+// tokens stream in.
+function timestampFromUuidV7(uuid: string): string {
+  const hex = uuid.slice(0, 8) + uuid.slice(9, 13);
+  const ms = Number.parseInt(hex, 16);
+  if (!Number.isFinite(ms)) return new Date().toISOString();
+  return new Date(ms).toISOString();
 }
 
 type StreamFrame =

@@ -1,6 +1,8 @@
 import crypto from "crypto";
-import { SIGNAL_OWNER, publishTurnSnapshot } from "@summon/shared";
+import { SIGNAL_OWNER, publishTurnSnapshot, createLogger } from "@summon/shared";
 import { uuidv7 } from "uuidv7";
+
+const log = createLogger("web:task-services");
 import { getWebServiceDependencies } from "./dependencies";
 import type { WebServiceDependencies } from "./dependencies";
 import { parseJsonArray } from "./json";
@@ -197,9 +199,8 @@ async function insertImmediateWakeMessage(
       orderingKey: uuidv7(),
     },
   });
-  await publishTurnSnapshot(taskId, []).catch(() => {
-    // Best-effort: failure to notify just means a connected SSE client will
-    // pick up the new row on its next 2s poll instead of immediately.
+  await publishTurnSnapshot(taskId, []).catch((err) => {
+    log.warn(`publishTurnSnapshot after insertImmediateWakeMessage failed: ${String(err)}`);
   });
 }
 
