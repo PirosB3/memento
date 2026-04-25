@@ -1,6 +1,43 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentRecord, buildTaskRecord } from "../../../test/helpers/factories";
+import type { Agent, Task } from "@prisma/client";
 import { buildContextSeedMessage, buildWakeMessage } from "./prompt-context";
+
+function buildAgentRecord() {
+  return {
+    agentId: "agent-1",
+    name: "Avery",
+    status: "RUNNING",
+    temporalRunId: "run-1",
+    createdAt: new Date(),
+    ownerEmail: "owner@example.com",
+    agentEmail: "avery@agentmail.test",
+    soul: "Helpful and calm.",
+    boundaries: "Escalate risky work.",
+    tools: "Email and filesystem.",
+    signatureDisplayName: null,
+    signatureDescription: null,
+    profileImageUrl: null,
+  } as Agent;
+}
+
+function buildTaskRecord(input: { isRoot: boolean; tag: string; objective: string }) {
+  return {
+    taskId: "task-1",
+    agentId: "agent-1",
+    status: "RUNNING",
+    parentTaskId: null,
+    temporalRunId: "run-1",
+    maxTurns: 25,
+    timeoutHours: 24,
+    lastActivityAt: new Date(),
+    createdAt: new Date(),
+    completedAt: null,
+    compactedPrefix: null,
+    compactedSummary: null,
+    compactedThroughId: null,
+    ...input,
+  } as Task;
+}
 
 describe("prompt context helpers", () => {
   it("builds a context seed with task and config snapshot", () => {

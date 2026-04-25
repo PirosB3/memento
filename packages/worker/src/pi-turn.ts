@@ -1,9 +1,5 @@
-import { Agent } from "../../../repos/pi-mono/packages/agent/dist/index.js";
-import { getModel } from "../../../repos/pi-mono/packages/ai/dist/index.js";
-import {
-  convertResponsesMessages,
-  convertResponsesTools,
-} from "../../../repos/pi-mono/packages/ai/dist/providers/openai-responses-shared.js";
+import { Agent } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
 import { prisma, buildSystemPrompt, createLogger, getAgentsDir, publishTurnSnapshot } from "@summon/shared";
 import type { AgentSignature, DecisionResult, PendingMessage } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
@@ -222,19 +218,12 @@ export async function runPiAgentTurnImpl(
       const result = await compactTaskContext({
         taskId,
         activeMessages: olderMessages,
-        systemPrompt,
-        tools,
-        mainModelId: "gpt-5.5",
         credentials: codexCreds,
-        existingCompactedPrefix: task.compactedPrefix,
         existingCompactedSummary: task.compactedSummary,
         lastConversationId: cutoffConvId,
         tokensBefore: olderTokens,
-        convertResponsesMessages: convertResponsesMessages as never,
-        responsesToolConverter: convertResponsesTools as never,
-        codexModelForConvert: model as never,
       });
-      if (result.mode === "prefix" || result.mode === "summary") {
+      if (result.mode === "summary") {
         // Keep only the recent messages in the active array; older ones are
         // now represented by the compacted prefix/summary and will be
         // injected via onPayload.

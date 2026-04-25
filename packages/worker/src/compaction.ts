@@ -3,23 +3,17 @@
  *
  * Strategy:
  *   1. Estimate token count of active conversation messages (chars/4 heuristic).
- *   2. When above threshold, compact via:
- *      a) OpenAI's /codex/responses/compact endpoint (if available on the ChatGPT backend), OR
- *      b) DIY summarization via gpt-5.5 as a fallback.
+ *   2. When above threshold, compact via DIY summarization using gpt-5.5.
  *   3. Persist the result on the Task row so subsequent turns inject it as a prefix.
  *
- * The OpenAI compact endpoint returns *opaque* compaction items that can only be passed
- * back to OpenAI verbatim. We store them in task.compactedPrefix (Json) and prepend them
- * to each outgoing Responses request via the Agent's onPayload hook.
- *
- * The DIY path produces a plain-text summary that we store in task.compactedSummary
+ * The compaction path produces a plain-text summary that we store in task.compactedSummary
  * and inject as a leading user message.
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { completeSimple, getModel } from "../../../repos/pi-mono/packages/ai/dist/index.js";
-import { refreshOpenAICodexToken } from "../../../repos/pi-mono/packages/ai/dist/oauth.js";
+import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import { refreshOpenAICodexToken } from "@mariozechner/pi-ai/oauth";
 import { prisma, createLogger } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
 
@@ -192,70 +186,18 @@ Output the FULL updated summary in the same format as before.`;
 // Compaction entry points
 // ============================================================================
 
-const CODEX_COMPACT_URL = "https://chatgpt.com/backend-api/codex/responses/compact";
-
 export interface CompactTaskContextArgs {
   taskId: string;
   activeMessages: AgentMessage[];
-  systemPrompt: string;
-  tools: Array<{ name: string; description?: string; parameters?: unknown }>;
-  mainModelId: string; // e.g. "gpt-5.5"
   credentials: CodexCredentials;
-  existingCompactedPrefix: unknown;
   existingCompactedSummary: string | null;
   lastConversationId: number;
   tokensBefore: number;
-  convertResponsesMessages: (
-    model: { id: string; api: string; provider: string },
-    context: { systemPrompt: string; messages: AgentMessage[]; tools: unknown[] },
-    allowedToolCallProviders: ReadonlySet<string>,
-    options?: { includeSystemPrompt?: boolean },
-  ) => unknown[];
-  responsesToolConverter: (tools: unknown[], options?: { strict?: boolean | null }) => unknown[];
-  codexModelForConvert: { id: string; api: string; provider: string };
 }
 
 export type CompactionResult =
-  | { mode: "prefix"; items: unknown[] }
   | { mode: "summary"; summary: string }
   | { mode: "skipped"; reason: string };
-
-/**
- * Try the standalone /codex/responses/compact endpoint. Returns the compacted
- * ResponseInput items on success, or null if the endpoint is unavailable
- * (404/405) — caller should fall back to DIY summarization.
- * Throws on other HTTP errors.
- */
-async function tryCodexCompactEndpoint(args: {
-  input: unknown[];
-  modelId: string;
-  credentials: CodexCredentials;
-}): Promise<unknown[] | null> {
-  const res = await fetch(CODEX_COMPACT_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${args.credentials.access}`,
-      "chatgpt-account-id": args.credentials.accountId,
-      "OpenAI-Beta": "responses=experimental",
-    },
-    body: JSON.stringify({ model: args.modelId, input: args.input }),
-  });
-
-  if (res.status === 404 || res.status === 405 || res.status === 501) {
-    return null; // endpoint not available on this backend
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`/codex/responses/compact failed: ${res.status} ${body.slice(0, 300)}`);
-  }
-
-  const json = (await res.json()) as { output?: unknown[] };
-  if (!Array.isArray(json.output)) {
-    throw new Error("/codex/responses/compact returned unexpected shape");
-  }
-  return json.output;
-}
 
 /**
  * DIY summarization fallback using gpt-5.5.
@@ -337,53 +279,10 @@ function serializeConversation(messages: AgentMessage[]): string {
 }
 
 /**
- * Compact the task context. Attempts the codex /compact endpoint first,
- * falls back to DIY summarization, and persists the result on the Task row.
+ * Compact the task context via summarization and persist the result on the Task row.
  */
 export async function compactTaskContext(args: CompactTaskContextArgs): Promise<CompactionResult> {
   const taskLog = log.child(`task:${args.taskId}`);
-
-  // Build the Responses input from active messages using pi-mono's converter
-  const responseInput = args.convertResponsesMessages(
-    args.codexModelForConvert,
-    { systemPrompt: args.systemPrompt, messages: args.activeMessages, tools: args.tools },
-    new Set(["openai", "openai-codex", "opencode"]),
-    { includeSystemPrompt: false },
-  );
-
-  // Attempt A: /codex/responses/compact, stacking on prior prefix
-  const existingPrefix = Array.isArray(args.existingCompactedPrefix)
-    ? (args.existingCompactedPrefix as unknown[])
-    : [];
-  const fullInput = [...existingPrefix, ...responseInput];
-
-  try {
-    const compactedOutput = await tryCodexCompactEndpoint({
-      input: fullInput,
-      modelId: args.mainModelId,
-      credentials: args.credentials,
-    });
-
-    if (compactedOutput) {
-      await prisma.task.update({
-        where: { taskId: args.taskId },
-        data: {
-          compactedPrefix: compactedOutput as never,
-          compactedSummary: null, // prefer prefix once available
-          compactedThroughId: args.lastConversationId,
-        },
-      });
-      taskLog.info(
-        `Compacted via /codex/responses/compact: ${compactedOutput.length} items (was ${args.tokensBefore} est tokens)`,
-      );
-      return { mode: "prefix", items: compactedOutput };
-    }
-
-    taskLog.info("/codex/responses/compact not available on this backend; falling back to DIY summarization");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    taskLog.warn(`/codex/responses/compact errored, falling back to DIY: ${msg}`);
-  }
 
   // Attempt B: DIY summarization via gpt-5.5
   try {

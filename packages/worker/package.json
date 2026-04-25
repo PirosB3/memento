@@ -9,6 +9,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.70.2",
+    "@mariozechner/pi-ai": "^0.70.2",
+    "@prisma/client": "^7.6.0",
     "@anthropic-ai/sdk": "^0.81.0",
     "@sinclair/typebox": "^0.34.0",
     "@summon/shared": "workspace:*",

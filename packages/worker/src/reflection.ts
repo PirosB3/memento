@@ -1,5 +1,5 @@
 import { prisma, createLogger, getAgentsDir } from "@summon/shared";
-import { completeSimple, getModel } from "../../../repos/pi-mono/packages/ai/dist/index.js";
+import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { loadCodexCredentials } from "./compaction.js";
 import fs from "fs";
 import path from "path";
