@@ -231,6 +231,42 @@ function ToolCallCard({
   );
 }
 
+function ThinkingCard({
+  block,
+}: {
+  block: Extract<DisplayBlock, { kind: "thinking" }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const preview = truncate(block.text.replace(/\s+/g, " ").trim(), 180);
+
+  return (
+    <div className="mx-auto flex w-full max-w-3xl justify-start">
+      <div className="w-full rounded-lg border border-blue-100 bg-blue-50/70 shadow-sm">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white/50"
+          onClick={() => setOpen((value) => !value)}
+        >
+          {open ? (
+            <ChevronDown className="text-blue-500" />
+          ) : (
+            <ChevronRight className="text-blue-500" />
+          )}
+          <span className="text-xs font-medium uppercase text-blue-700">Thinking</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-blue-900/65">{preview}</span>
+          <span className="text-[10px] text-blue-900/45">{formatTs(block.timestamp)}</span>
+        </button>
+
+        {open && (
+          <div className="border-t border-blue-100 px-3 py-3">
+            <MarkdownBody content={block.text} className="text-xs leading-relaxed text-blue-950/80" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RoleBubble({
   block,
   agent,
@@ -354,6 +390,8 @@ function ChatTranscript({
             {blocks.map((block, index) => (
               block.kind === "role" ? (
                 <RoleBubble key={`${block.rowId}-${index}`} block={block} agent={agent} />
+              ) : block.kind === "thinking" ? (
+                <ThinkingCard key={`${block.rowId}-${index}`} block={block} />
               ) : (
                 <ToolCallCard key={`${block.rowId}-${index}`} block={block} />
               )

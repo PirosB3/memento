@@ -14,6 +14,7 @@ import {
 } from "./lib/conversation";
 
 const BASH_TRUNCATE = 2000;
+const THINKING_PREVIEW_LIMIT = 160;
 
 function formatTs(ts: string): string {
   try {
@@ -21,6 +22,12 @@ function formatTs(ts: string): string {
   } catch {
     return ts;
   }
+}
+
+function previewText(text: string, limit: number): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= limit) return compact;
+  return `${compact.slice(0, limit).trimEnd()}\u2026`;
 }
 
 function Highlight({ text, needle }: { text: string; needle: string }) {
@@ -54,6 +61,58 @@ function Highlight({ text, needle }: { text: string; needle: string }) {
         ),
       )}
     </>
+  );
+}
+
+function ThinkingCard({
+  block,
+  needle,
+}: {
+  block: Extract<DisplayBlock, { kind: "thinking" }>;
+  needle: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const preview = previewText(block.text, THINKING_PREVIEW_LIMIT);
+
+  return (
+    <div className="rounded-lg border border-blue-500/15 bg-blue-500/8 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-blue-500/8 transition-colors"
+      >
+        <span
+          className={`transition-transform text-blue-300/80 text-[10px] ${
+            open ? "rotate-90" : ""
+          }`}
+          aria-hidden
+        >
+          &#9654;
+        </span>
+        <span className="text-[10px] uppercase tracking-wider font-semibold text-blue-300">
+          Thinking
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-blue-100/70">
+          {needle ? <Highlight text={preview} needle={needle} /> : preview}
+        </span>
+        <span className="text-[10px] text-blue-100/50">{formatTs(block.timestamp)}</span>
+      </button>
+
+      {open && (
+        <div className="border-t border-blue-500/10 px-3 py-2">
+          {needle ? (
+            <pre className="text-xs whitespace-pre-wrap font-sans text-blue-50/80 leading-relaxed">
+              <Highlight text={block.text} needle={needle} />
+            </pre>
+          ) : (
+            <MarkdownBody
+              content={block.text}
+              className="text-xs text-blue-50/80 leading-relaxed"
+            />
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -381,6 +440,11 @@ export default function ConversationView({
               if (block.kind === "role") {
                 return (
                   <RoleMessage key={`${block.rowId}-${i}`} block={block} needle={search} />
+                );
+              }
+              if (block.kind === "thinking") {
+                return (
+                  <ThinkingCard key={`${block.rowId}-${i}`} block={block} needle={search} />
                 );
               }
               return (
