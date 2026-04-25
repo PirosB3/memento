@@ -1,5 +1,5 @@
 import { prisma, createLogger, getAgentsDir } from "@summon/shared";
-import { completeSimple, getModel } from "../../../repos/pi-mono/packages/ai/dist/index.js";
+import { completeSimple, getModel } from "@mariozechner/pi-ai";
 import { loadCodexCredentials } from "./compaction.js";
 import fs from "fs";
 import path from "path";
@@ -68,7 +68,7 @@ Context: ${triggerContext}
 Write a short wake reflection for the main turn.`;
 
   const creds = await loadCodexCredentials();
-  const model = getModel("openai-codex" as never, "gpt-5.4" as never) as never;
+  const model = getModel("openai-codex" as never, "gpt-5.5" as never) as never;
 
   const response = await completeSimple(
     model,
@@ -156,7 +156,7 @@ ${conversationExcerpt || "(none)"}
 Write the reflection digest.`;
 
   const creds = await loadCodexCredentials();
-  const model = getModel("openai-codex" as never, "gpt-5.4" as never) as never;
+  const model = getModel("openai-codex" as never, "gpt-5.5" as never) as never;
 
   const response = await completeSimple(
     model,

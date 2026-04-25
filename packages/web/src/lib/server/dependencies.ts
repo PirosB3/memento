@@ -1,8 +1,7 @@
 import { Connection, Client } from "@temporalio/client";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { prisma, getTemporalAddress, getWorkspaceRoot, TASK_QUEUE } from "@summon/shared";
+import { dirname, join } from "node:path";
+import { prisma, getTemporalAddress, TASK_QUEUE } from "@summon/shared";
 import crypto from "crypto";
 import type { TaskWorkflowResumeInput } from "@summon/shared";
 import {
@@ -67,12 +66,12 @@ type AgentMailModule = {
 };
 
 type PiAiModule = {
-  completeSimple: typeof import("../../../../../repos/pi-mono/packages/ai/dist/index.js").completeSimple;
-  getModel: typeof import("../../../../../repos/pi-mono/packages/ai/dist/index.js").getModel;
+  completeSimple: typeof import("@mariozechner/pi-ai").completeSimple;
+  getModel: typeof import("@mariozechner/pi-ai").getModel;
 };
 
 type PiAiOauthModule = {
-  refreshOpenAICodexToken: typeof import("../../../../../repos/pi-mono/packages/ai/dist/oauth.js").refreshOpenAICodexToken;
+  refreshOpenAICodexToken: typeof import("@mariozechner/pi-ai/oauth").refreshOpenAICodexToken;
 };
 
 let temporalClient: Client | null = null;
@@ -98,26 +97,18 @@ function isFakeMode(flag: "MAIL" | "LLM" | "WORKFLOW" | "AVATARS"): boolean {
   return process.env.SUMMON_FAKE_EXTERNALS === "1" || process.env[`SUMMON_FAKE_${flag}`] === "1";
 }
 
-function resolvePiAiDistModule(moduleName: string): string {
-  return pathToFileURL(
-    resolve(getWorkspaceRoot(), "repos", "pi-mono", "packages", "ai", "dist", moduleName),
-  ).href;
-}
-
 function loadAgentMailModule(): Promise<AgentMailModule> {
   agentMailModulePromise ||= importRuntimeModule<AgentMailModule>("agentmail");
   return agentMailModulePromise;
 }
 
 function loadPiAiModule(): Promise<PiAiModule> {
-  piAiModulePromise ||= importRuntimeModule<PiAiModule>(resolvePiAiDistModule("index.js"));
+  piAiModulePromise ||= importRuntimeModule<PiAiModule>("@mariozechner/pi-ai");
   return piAiModulePromise;
 }
 
 function loadPiAiOauthModule(): Promise<PiAiOauthModule> {
-  piAiOauthModulePromise ||= importRuntimeModule<PiAiOauthModule>(
-    resolvePiAiDistModule("oauth.js"),
-  );
+  piAiOauthModulePromise ||= importRuntimeModule<PiAiOauthModule>("@mariozechner/pi-ai/oauth");
   return piAiOauthModulePromise;
 }
 
@@ -197,7 +188,7 @@ function createRealLlmGateway(): LlmGateway {
       const { completeSimple, getModel } = await loadPiAiModule();
       const creds = await loadCodexCredentials();
       void model;
-      const codexModel = getModel("openai-codex" as never, "gpt-5.4" as never) as never;
+      const codexModel = getModel("openai-codex" as never, "gpt-5.5" as never) as never;
 
       const response = await completeSimple(
         codexModel,
