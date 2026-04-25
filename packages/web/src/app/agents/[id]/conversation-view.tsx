@@ -246,6 +246,8 @@ export default function ConversationView({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pinnedRef = useRef<boolean>(true);
   const lastCountRef = useRef<number>(conversations.length);
+  const [pinned, setPinned] = useState(true);
+  const [unread, setUnread] = useState(0);
 
   const blocks = useMemo(() => buildDisplayBlocks(conversations), [conversations]);
   const filteredBlocks = useMemo(
@@ -260,16 +262,26 @@ export default function ConversationView({
     const el = scrollRef.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    pinnedRef.current = distance < 24;
+    const nowPinned = distance < 80;
+    if (nowPinned !== pinnedRef.current) {
+      pinnedRef.current = nowPinned;
+      setPinned(nowPinned);
+      if (nowPinned) setUnread(0);
+    }
   }
 
   // Auto-scroll to bottom when new rows arrive, but only if pinned.
+  // Otherwise bump the unread counter so the jump button shows how much was missed.
   useEffect(() => {
-    if (conversations.length !== lastCountRef.current) {
+    const prev = lastCountRef.current;
+    if (conversations.length !== prev) {
+      const delta = conversations.length - prev;
       lastCountRef.current = conversations.length;
       if (pinnedRef.current) {
         const el = scrollRef.current;
         if (el) el.scrollTop = el.scrollHeight;
+      } else if (delta > 0) {
+        setUnread((u) => u + delta);
       }
     }
   }, [conversations.length]);
@@ -285,6 +297,8 @@ export default function ConversationView({
     if (el) {
       el.scrollTop = el.scrollHeight;
       pinnedRef.current = true;
+      setPinned(true);
+      setUnread(0);
     }
   }
 
@@ -376,13 +390,18 @@ export default function ConversationView({
           )}
         </div>
 
-        {!search && (
+        {!search && !pinned && (
           <button
             type="button"
             onClick={jumpToLatest}
-            className="absolute bottom-2 right-3 text-[10px] uppercase tracking-wider font-semibold text-muted-foreground bg-[#141419] hover:text-[var(--accent)] border border-[var(--border)] rounded-full px-2.5 py-1 shadow-md transition-colors"
+            className="absolute bottom-2 right-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold text-muted-foreground bg-[#141419] hover:text-[var(--accent)] border border-[var(--border)] rounded-full pl-2.5 pr-2.5 py-1 shadow-md transition-colors"
           >
-            jump to latest &darr;
+            {unread > 0 && (
+              <span className="bg-[var(--accent)] text-black rounded-full px-1.5 py-0.5 text-[9px] leading-none font-bold normal-case tracking-normal">
+                {unread > 99 ? "99+" : unread}
+              </span>
+            )}
+            <span>jump to latest &darr;</span>
           </button>
         )}
       </div>

@@ -273,6 +273,11 @@ function ChatTranscript({
   task: ControlPlaneSelectedTaskView;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef<boolean>(true);
+  const lastCountRef = useRef<number>(0);
+  const [pinned, setPinned] = useState(true);
+  const [unread, setUnread] = useState(0);
+
   const { pendingOverlay } = useTurnStream(agent.agentId, task.detail.taskId);
   const merged = useMemo(
     () => mergeOverlay(task.detail.conversations, pendingOverlay),
@@ -280,33 +285,95 @@ function ChatTranscript({
   );
   const blocks = useMemo(() => buildDisplayBlocks(merged.conversations), [merged.conversations]);
 
+  // When the task changes, snap to bottom and reset counters.
   useEffect(() => {
     const element = scrollRef.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [blocks.length, task.key]);
+    pinnedRef.current = true;
+    setPinned(true);
+    setUnread(0);
+    lastCountRef.current = blocks.length;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.key]);
+
+  // Auto-scroll when new blocks arrive, but only if the user is pinned.
+  // Otherwise bump the unread counter.
+  useEffect(() => {
+    const prev = lastCountRef.current;
+    if (blocks.length === prev) return;
+    const delta = blocks.length - prev;
+    lastCountRef.current = blocks.length;
+    if (pinnedRef.current) {
+      const element = scrollRef.current;
+      if (element) element.scrollTop = element.scrollHeight;
+    } else if (delta > 0) {
+      setUnread((u) => u + delta);
+    }
+  }, [blocks.length]);
+
+  function handleScroll() {
+    const element = scrollRef.current;
+    if (!element) return;
+    const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+    const nowPinned = distance < 80;
+    if (nowPinned !== pinnedRef.current) {
+      pinnedRef.current = nowPinned;
+      setPinned(nowPinned);
+      if (nowPinned) setUnread(0);
+    }
+  }
+
+  function jumpToLatest() {
+    const element = scrollRef.current;
+    if (!element) return;
+    element.scrollTop = element.scrollHeight;
+    pinnedRef.current = true;
+    setPinned(true);
+    setUnread(0);
+  }
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-7 md:px-10">
-      {blocks.length === 0 ? (
-        <div className="mx-auto flex max-w-xl flex-col items-center justify-center gap-3 py-24 text-center">
-          <div className="flex size-12 items-center justify-center rounded-full border border-border bg-white">
-            <Bot className="text-muted-foreground" />
+    <div className="relative flex-1 min-h-0">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="absolute inset-0 overflow-y-auto px-4 py-7 md:px-10"
+      >
+        {blocks.length === 0 ? (
+          <div className="mx-auto flex max-w-xl flex-col items-center justify-center gap-3 py-24 text-center">
+            <div className="flex size-12 items-center justify-center rounded-full border border-border bg-white">
+              <Bot className="text-muted-foreground" />
+            </div>
+            <div className="text-sm font-medium text-foreground">No conversation yet</div>
+            <p className="text-sm text-muted-foreground">
+              Messages and tool calls for this task will appear here.
+            </p>
           </div>
-          <div className="text-sm font-medium text-foreground">No conversation yet</div>
-          <p className="text-sm text-muted-foreground">
-            Messages and tool calls for this task will appear here.
-          </p>
-        </div>
-      ) : (
-        <div className="mx-auto flex max-w-4xl flex-col gap-5">
-          {blocks.map((block, index) => (
-            block.kind === "role" ? (
-              <RoleBubble key={`${block.rowId}-${index}`} block={block} agent={agent} />
-            ) : (
-              <ToolCallCard key={`${block.rowId}-${index}`} block={block} />
-            )
-          ))}
-        </div>
+        ) : (
+          <div className="mx-auto flex max-w-4xl flex-col gap-5">
+            {blocks.map((block, index) => (
+              block.kind === "role" ? (
+                <RoleBubble key={`${block.rowId}-${index}`} block={block} agent={agent} />
+              ) : (
+                <ToolCallCard key={`${block.rowId}-${index}`} block={block} />
+              )
+            ))}
+          </div>
+        )}
+      </div>
+      {!pinned && blocks.length > 0 && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          className="absolute bottom-4 right-6 flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-md transition-colors hover:border-slate-300 hover:text-slate-900"
+        >
+          {unread > 0 && (
+            <span className="rounded-full bg-slate-900 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
+          <span>Jump to latest ↓</span>
+        </button>
       )}
     </div>
   );
