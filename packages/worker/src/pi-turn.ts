@@ -168,8 +168,8 @@ export async function runPiAgentTurnImpl(
 
   taskLog.info(`System prompt built: ${systemPrompt.length} chars, ${messages.length} messages, ${tools.length} tools`);
 
-  // 8. Get model (GPT-5.4 via ChatGPT OAuth subscription)
-  const model = getModel("openai-codex", "gpt-5.4");
+  // 8. Get model (GPT-5.5 via ChatGPT OAuth subscription)
+  const model = getModel("openai-codex", "gpt-5.5");
 
   // 8a. Load OAuth credentials (auto-refreshes if expired)
   const codexCreds = await loadCodexCredentials();
@@ -224,7 +224,7 @@ export async function runPiAgentTurnImpl(
         activeMessages: olderMessages,
         systemPrompt,
         tools,
-        mainModelId: "gpt-5.4",
+        mainModelId: "gpt-5.5",
         credentials: codexCreds,
         existingCompactedPrefix: task.compactedPrefix,
         existingCompactedSummary: task.compactedSummary,

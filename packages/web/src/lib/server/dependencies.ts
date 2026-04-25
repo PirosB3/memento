@@ -197,7 +197,7 @@ function createRealLlmGateway(): LlmGateway {
       const { completeSimple, getModel } = await loadPiAiModule();
       const creds = await loadCodexCredentials();
       void model;
-      const codexModel = getModel("openai-codex" as never, "gpt-5.4" as never) as never;
+      const codexModel = getModel("openai-codex" as never, "gpt-5.5" as never) as never;
 
       const response = await completeSimple(
         codexModel,

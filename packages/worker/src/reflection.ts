@@ -68,7 +68,7 @@ Context: ${triggerContext}
 Write a short wake reflection for the main turn.`;
 
   const creds = await loadCodexCredentials();
-  const model = getModel("openai-codex" as never, "gpt-5.4" as never) as never;
+  const model = getModel("openai-codex" as never, "gpt-5.5" as never) as never;
 
   const response = await completeSimple(
     model,
@@ -156,7 +156,7 @@ ${conversationExcerpt || "(none)"}
 Write the reflection digest.`;
 
   const creds = await loadCodexCredentials();
-  const model = getModel("openai-codex" as never, "gpt-5.4" as never) as never;
+  const model = getModel("openai-codex" as never, "gpt-5.5" as never) as never;
 
   const response = await completeSimple(
     model,
