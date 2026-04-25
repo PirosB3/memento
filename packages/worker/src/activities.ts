@@ -18,6 +18,7 @@ import path from "path";
 import { buildContextSeedMessage, buildWakeMessage } from "./prompt-context.js";
 import type { WakeSource } from "@summon/shared";
 import {
+  buildCappedTodoSnapshot,
   buildInvalidTodoNotice,
   buildMissingTodoNotice,
   readTodoSnapshot,
@@ -82,7 +83,7 @@ function buildTodoSnapshotForPrompt(agentDir: string, task: { isRoot: boolean; t
     return `${todoState.snapshot}\n\nNOTE: ${buildInvalidTodoNotice(todoRelativePath)}`;
   }
 
-  return todoState.snapshot;
+  return buildCappedTodoSnapshot(todoState);
 }
 
 function readTextFileOrNull(filePath: string): string | null {
