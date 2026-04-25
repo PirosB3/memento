@@ -76,6 +76,20 @@ type OutgoingEmailInput = {
   attachments?: Record<string, unknown>[];
 };
 
+export type SentEmailInfo = {
+  to: string[];
+  subject: string;
+};
+
+type SendEmailToolOptions = {
+  signature?: AgentSignature | null;
+  onSentEmail?: (email: SentEmailInfo) => void;
+};
+
+function isSendEmailToolOptions(value: AgentSignature | SendEmailToolOptions): value is SendEmailToolOptions {
+  return "signature" in value || "onSentEmail" in value;
+}
+
 type AttachmentAccess = {
   access: "none" | "owner" | "blocked";
   items: MessageAttachment[];
@@ -106,6 +120,10 @@ export function setAgentMailClientForTests(client: AgentMailLike | null): void {
   agentmailClient = client;
 }
 
+export function subjectHasActionRequiredMarker(subject: string): boolean {
+  return /\[action required\]/i.test(subject);
+}
+
 export function addTag(email: string, tag: string): string {
   const [local, domain] = email.split("@");
   return `${local}+${tag}@${domain}`;
@@ -117,6 +135,10 @@ function extractEmailAddress(addr: string): string {
   if (!trimmed) return "";
   const match = trimmed.match(/<([^>]+)>/);
   return (match?.[1] ?? trimmed).trim().toLowerCase();
+}
+
+export function emailAddressEquals(a: string, b: string): boolean {
+  return extractEmailAddress(a) === extractEmailAddress(b);
 }
 
 function createSelfAddressMatcher(agentEmail: string): (addr: string) => boolean {
@@ -437,10 +459,14 @@ export function createSendEmailTool(
   agentEmail: string,
   agentDir: string,
   tag?: string,
-  signature?: AgentSignature | null,
+  optionsOrSignature?: AgentSignature | null | SendEmailToolOptions,
 ): AgentTool {
   const inboxId = agentEmail;
   const taggedEmail = tag ? addTag(agentEmail, tag) : null;
+  const options: SendEmailToolOptions =
+    optionsOrSignature && isSendEmailToolOptions(optionsOrSignature)
+      ? optionsOrSignature
+      : { signature: optionsOrSignature ?? null };
 
   return {
     name: "send_email",
@@ -463,9 +489,13 @@ export function createSendEmailTool(
       try {
         const p = params as SendEmailParams;
         const agentmail = getAgentMailClient();
-        const sendParams = buildEmailPayload(p, { mode: "send", agentDir, taggedEmail, signature });
+        const sendParams = buildEmailPayload(p, { mode: "send", agentDir, taggedEmail, signature: options.signature });
         const result = await agentmail.inboxes.messages.send(inboxId, sendParams) as Record<string, unknown>;
         const toList = normalizeAddressList(p.to);
+        options.onSentEmail?.({
+          to: toList,
+          subject: sendParams.subject ?? "",
+        });
         const ccList = normalizeAddressList(sendParams.cc as string[] | undefined);
         const bccList = normalizeAddressList(sendParams.bcc as string[] | undefined);
         const recipientParts = [`to ${toList.join(", ")}`];

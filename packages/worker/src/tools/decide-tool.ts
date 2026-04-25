@@ -10,6 +10,7 @@ import {
 interface DecideToolOptions {
   isRoot?: boolean;
   todoFilePath?: string;
+  hasSentEscalationEmail?: () => boolean;
 }
 
 export function createDecideTool(
@@ -24,12 +25,12 @@ export function createDecideTool(
   const typeDescription = isRoot
     ? `Types:
 - "sleep": Go to sleep and wait for emails or a timer. Set sleepDurationMs.
-- "escalate": Escalate to the owner. You must have already sent the escalation email before calling this.
+- "escalate": Escalate to the owner. You must have already sent a new email directly to the owner with [ACTION REQUIRED] in the subject before calling this.
 
 You are the root task — you cannot complete or fail. You are always on.`
     : `Types:
 - "sleep": Go to sleep only when your TODO list has no actionable items left. Set sleepDurationMs. Only use this when you are waiting for something external (owner reply, timer, participant response).
-- "escalate": Ask the owner for help. Use this the moment you are stuck, blocked by a broken tool path, or missing information only the owner can give you. You must have already sent the escalation email before calling this.
+- "escalate": Ask the owner for help. Use this the moment you are stuck, blocked by a broken tool path, or missing information only the owner can give you. You must have already sent a new email directly to the owner with [ACTION REQUIRED] in the subject before calling this.
 - "complete": This task's objective is achieved. Provide a summary.
 - "fail": Unrecoverable error. Provide an error message.`;
 
@@ -108,6 +109,16 @@ Always include a stopReason explaining what you did this turn and why you chose 
             details: { error: true, actionableCount: todoState.actionableItems.length },
           };
         }
+      }
+
+      if (p.type === "escalate" && options.hasSentEscalationEmail && !options.hasSentEscalationEmail()) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Before deciding escalate, send a new email directly to the owner with [ACTION REQUIRED] in the subject, then call decide(escalate) again. Do not use reply_email for escalation.",
+          }],
+          details: { error: true, missingActionRequiredEscalationEmail: true },
+        };
       }
 
       const decision: DecisionResult = {

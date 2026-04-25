@@ -59,6 +59,7 @@ If you need Python in the workspace:
 - Use \`send_email\` only for new conversations.
 - When emailing participants, CC the owner unless the latest context says otherwise.
 - When emailing the owner directly, do not CC participants.
+- When escalating, send a new email directly to the owner with \`send_email\`. The subject must include \`[ACTION REQUIRED]\`. Do not use \`reply_email\` for escalation.
 - Attach files with workspace-relative paths.
 
 ## IMAGE HANDLING
@@ -153,6 +154,7 @@ If you need Python in the workspace:
 - Use \`send_email\` only for new conversations.
 - When emailing participants, CC the owner unless the latest context says otherwise.
 - When emailing the owner directly, do not CC participants.
+- When escalating, send a new email directly to the owner with \`send_email\`. The subject must include \`[ACTION REQUIRED]\`. Do not use \`reply_email\` for escalation.
 - Attach files with workspace-relative paths.
 
 ## IMAGE HANDLING
@@ -183,7 +185,7 @@ Never quit work silently. The only two legitimate reasons to stop working on an 
 1. You are waiting for something external (an owner reply, a scheduled timer, a participant response) — use \`sleep\`.
 2. You are stuck or need information the owner hasn't given you — use \`escalate\`.
 
-If a tool path is broken, a site is unresponsive, credentials don't work, or you've attempted the same action twice without progress: \`escalate\`. Send the owner a short email describing what you tried, what failed, and what you need from them, then call \`decide(escalate)\`. Do not \`sleep\` with actionable items still pending. The owner would rather answer a question now than discover hours later that you stopped making progress.
+If a tool path is broken, a site is unresponsive, credentials don't work, or you've attempted the same action twice without progress: \`escalate\`. Send the owner a short new email with \`send_email\` describing what you tried, what failed, and what you need from them. The subject must include \`[ACTION REQUIRED]\`. Then call \`decide(escalate)\`. Do not \`sleep\` with actionable items still pending. The owner would rather answer a question now than discover hours later that you stopped making progress.
 
 ## YOUR TASK
 1. Read the context seed and latest wake message.

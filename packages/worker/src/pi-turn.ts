@@ -22,6 +22,8 @@ import {
   createFilteredReadEmailsTool,
   createListThreadsTool,
   createFilteredListThreadsTool,
+  emailAddressEquals,
+  subjectHasActionRequiredMarker,
 } from "./tools/agentmail-tools.js";
 import { createBashTool } from "./tools/bash-tool.js";
 import { createReadFileTool, createWriteFileTool } from "./tools/file-tools.js";
@@ -104,6 +106,14 @@ export async function runPiAgentTurnImpl(
 
   // 6. Set up decision capture
   let capturedDecision: DecisionResult | null = null;
+  let sentMarkedEscalationEmail = false;
+  const trackSentEmail = (email: { to: string[]; subject: string }) => {
+    const sentToOwner = email.to.some((recipient) => emailAddressEquals(recipient, agent.ownerEmail));
+    if (sentToOwner && subjectHasActionRequiredMarker(email.subject)) {
+      sentMarkedEscalationEmail = true;
+    }
+  };
+  const hasSentEscalationEmail = () => sentMarkedEscalationEmail;
 
   // Build the email signature block from agent profile fields (null-safe — if the
   // agent pre-dates the feature and has no signature fields, outgoing emails remain
@@ -122,7 +132,7 @@ export async function runPiAgentTurnImpl(
   const tools = isRoot
     ? [
         // Root: unfiltered email tools, base address
-        createSendEmailTool(agent.agentEmail, agentDir, undefined, signature),
+        createSendEmailTool(agent.agentEmail, agentDir, undefined, { signature, onSentEmail: trackSentEmail }),
         createReplyEmailTool(agent.agentEmail, agentDir, undefined, signature),
         createReadEmailTool(agent.agentEmail, agent.ownerEmail),
         createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
@@ -143,11 +153,11 @@ export async function runPiAgentTurnImpl(
         createBashTool(agentDir),
         createReadFileTool(agentDir),
         createWriteFileTool(agentDir),
-        createDecideTool((d) => { capturedDecision = d; }, { isRoot: true }),
+        createDecideTool((d) => { capturedDecision = d; }, { isRoot: true, hasSentEscalationEmail }),
       ]
     : [
         // Child: filtered email tools, +tag address
-        createSendEmailTool(agent.agentEmail, agentDir, task.tag, signature),
+        createSendEmailTool(agent.agentEmail, agentDir, task.tag, { signature, onSentEmail: trackSentEmail }),
         createReplyEmailTool(agent.agentEmail, agentDir, task.tag, signature),
         createReadEmailTool(agent.agentEmail, agent.ownerEmail),
         createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
@@ -163,6 +173,7 @@ export async function runPiAgentTurnImpl(
         createWriteFileTool(agentDir),
         createDecideTool((d) => { capturedDecision = d; }, {
           todoFilePath: path.join(agentDir, "tasks", task.tag, "todo.md"),
+          hasSentEscalationEmail,
         }),
       ];
 
