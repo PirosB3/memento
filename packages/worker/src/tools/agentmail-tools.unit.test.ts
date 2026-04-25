@@ -9,6 +9,7 @@ import {
   createReplyEmailTool,
   createSendEmailTool,
   setAgentMailClientForTests,
+  subjectHasActionRequiredMarker,
 } from "./agentmail-tools";
 
 let tempDirs: string[] = [];
@@ -58,6 +59,12 @@ function createArrayBuffer(bytes: Buffer): ArrayBuffer {
 }
 
 describe("agentmail tools", () => {
+  it("detects ACTION REQUIRED subject markers case-insensitively", () => {
+    expect(subjectHasActionRequiredMarker("[ACTION REQUIRED] Need input")).toBe(true);
+    expect(subjectHasActionRequiredMarker("Re: [action required] Need input")).toBe(true);
+    expect(subjectHasActionRequiredMarker("Need input")).toBe(false);
+  });
+
   it("appends the agent signature to text and generates HTML fallback when only text was provided", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();
@@ -193,6 +200,42 @@ describe("agentmail tools", () => {
 
     expect(getText(result)).toContain("to person@example.com, other@example.com");
     expect(getText(result)).toContain("1 attachment (generated/hello.txt)");
+  });
+
+  it("calls the sent-email hook after a successful send", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    const onSentEmail = vi.fn();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-hook" });
+
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, { onSentEmail });
+    await tool.execute("call-hook", {
+      to: ["Owner <owner@example.com>", "other@example.com", "owner@example.com"],
+      subject: "[ACTION REQUIRED] Need input",
+      body: "Please advise.",
+    });
+
+    expect(onSentEmail).toHaveBeenCalledWith({
+      to: ["Owner <owner@example.com>", "other@example.com", "owner@example.com"],
+      subject: "[ACTION REQUIRED] Need input",
+    });
+  });
+
+  it("does not call the sent-email hook when send fails", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    const onSentEmail = vi.fn();
+    client.inboxes.messages.send.mockRejectedValue(new Error("network down"));
+
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, { onSentEmail });
+    const result = await tool.execute("call-hook-fail", {
+      to: "owner@example.com",
+      subject: "[ACTION REQUIRED] Need input",
+      body: "Please advise.",
+    });
+
+    expect(result.details).toEqual({ error: true });
+    expect(onSentEmail).not.toHaveBeenCalled();
   });
 
   it("rejects sends with no content", async () => {

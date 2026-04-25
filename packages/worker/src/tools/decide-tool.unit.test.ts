@@ -50,7 +50,7 @@ describe("decide tool", () => {
     });
 
     expect(getText(result)).toContain("Decision recorded: sleep");
-    expect(captured?.type).toBe("sleep");
+    expect(captured).toMatchObject({ type: "sleep" });
   });
 
   it("rejects sleep when actionable work remains", async () => {
@@ -114,6 +114,56 @@ describe("decide tool", () => {
 
     expect(getText(result)).toContain("Decision recorded: defer");
     expect(result.details).toMatchObject({ autoDeferred: true, type: "defer" });
-    expect(captured?.type).toBe("defer");
+    expect(captured).toMatchObject({ type: "defer" });
+  });
+
+  it("allows escalation when a marked owner email was sent", async () => {
+    let captured: DecisionResult | null = null;
+    const tool = createDecideTool((decision) => {
+      captured = decision;
+    }, { hasSentEscalationEmail: () => true });
+
+    const result = await tool.execute("call-7", {
+      type: "escalate",
+      stopReason: "Asked the owner for missing context.",
+      escalationQuestion: "Can you confirm the budget?",
+    });
+
+    expect(getText(result)).toContain("Decision recorded: escalate");
+    expect(captured).toMatchObject({ type: "escalate" });
+  });
+
+  it("rejects escalation when no marked owner email was sent", async () => {
+    let captured: DecisionResult | null = null;
+    const tool = createDecideTool((decision) => {
+      captured = decision;
+    }, { hasSentEscalationEmail: () => false });
+
+    const result = await tool.execute("call-8", {
+      type: "escalate",
+      stopReason: "Missing context.",
+      escalationQuestion: "Can you confirm the budget?",
+    });
+
+    expect(result.details).toEqual({ error: true, missingActionRequiredEscalationEmail: true });
+    expect(getText(result)).toContain("[ACTION REQUIRED]");
+    expect(getText(result)).toContain("send a new email directly to the owner");
+    expect(captured).toBeNull();
+  });
+
+  it("rejects root escalation when no marked owner email was sent", async () => {
+    let captured: DecisionResult | null = null;
+    const tool = createDecideTool((decision) => {
+      captured = decision;
+    }, { isRoot: true, hasSentEscalationEmail: () => false });
+
+    const result = await tool.execute("call-9", {
+      type: "escalate",
+      stopReason: "Root needs owner input.",
+      escalationQuestion: "Should I spawn a task for this?",
+    });
+
+    expect(result.details).toEqual({ error: true, missingActionRequiredEscalationEmail: true });
+    expect(captured).toBeNull();
   });
 });
