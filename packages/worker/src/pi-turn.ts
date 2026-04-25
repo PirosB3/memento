@@ -39,6 +39,11 @@ import {
   createListSchedulesTool,
   createCancelScheduleTool,
 } from "./tools/schedule-tools.js";
+import {
+  ensureSharedSkillsLink,
+  loadSkillManifest,
+  renderSkillManifest,
+} from "./skill-manifest.js";
 import fs from "fs";
 import path from "path";
 
@@ -79,13 +84,9 @@ export async function runPiAgentTurnImpl(
   // Symlink shared/ into the agent workspace so every agent has access to shared skills.
   // Target is relative to the directory containing the symlink: ../../shared resolves from
   // packages/worker/agents/{id}/ up to packages/worker/shared/.
-  const sharedLinkPath = path.join(agentDir, "shared");
-  if (!fs.existsSync(sharedLinkPath)) {
-    try {
-      fs.symlinkSync("../../shared", sharedLinkPath, "dir");
-    } catch (err) {
-      taskLog.warn(`Failed to create shared/ symlink: ${String(err)}`);
-    }
+  const sharedLink = ensureSharedSkillsLink(agentDir);
+  if (sharedLink.warning) {
+    taskLog.warn(sharedLink.warning);
   }
 
   // Ensure task-level directory exists (child tasks only)
@@ -94,8 +95,12 @@ export async function runPiAgentTurnImpl(
     fs.mkdirSync(taskDir, { recursive: true });
   }
 
-  // 5. Build the static role prompt
-  const systemPrompt = buildSystemPrompt(isRoot);
+  // 5. Build the role prompt with the current skill manifest.
+  const skillManifest = loadSkillManifest(agentDir);
+  for (const warning of skillManifest.warnings) {
+    taskLog.warn(warning);
+  }
+  const systemPrompt = buildSystemPrompt(isRoot, renderSkillManifest(skillManifest.entries));
 
   // 6. Set up decision capture
   let capturedDecision: DecisionResult | null = null;
