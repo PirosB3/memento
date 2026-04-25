@@ -752,9 +752,9 @@ async function activeLoop(
         wake = {
           trigger: "owner_response",
           wokenBy: "owner",
-          triggerContext: `Owner sent a message (messageId=${ownerWake.messageId}).`,
+          triggerContext: "Owner sent a message.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: `Use read_email with messageId "${ownerWake.messageId}" to read the owner email, then act on it.`,
+          actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
         };
       } else {
         const inlineContext = ownerWake.message
@@ -842,9 +842,9 @@ async function activeLoop(
         escalationWake = {
           trigger: "owner_response",
           wokenBy: "owner",
-          triggerContext: `Owner responded to escalation (messageId=${ownerWake.messageId}).`,
+          triggerContext: "Owner responded to escalation.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: `Use read_email with messageId "${ownerWake.messageId}" to read the owner's escalation response, then proceed.`,
+          actionNow: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed.",
         };
       } else {
         const inlineContext = ownerWake.message
@@ -920,9 +920,9 @@ async function dormantLoop(
         wake = {
           trigger: "owner_response",
           wokenBy: "owner",
-          triggerContext: `Owner sent a message to completed task (messageId=${ownerWake.messageId}). Reanimating.`,
+          triggerContext: "Owner sent a message to completed task. Reanimating.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: `Use read_email with messageId "${ownerWake.messageId}" to inspect the owner's new request and decide whether to resume work.`,
+          actionNow: "Use read_email with the MESSAGE_ID above to inspect the owner's new request and decide whether to resume work.",
         };
       } else {
         const inlineContext = ownerWake.message

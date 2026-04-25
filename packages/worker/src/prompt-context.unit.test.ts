@@ -59,11 +59,11 @@ describe("prompt context helpers", () => {
       wokenBy: "owner",
       priorState: "SLEEPING",
       lastStopReason: "Waiting for owner input",
-      triggerContext: "Owner sent a message (messageId=msg-123).",
+      triggerContext: "Owner sent a message.",
       metadata: [{ label: "MESSAGE_ID", value: "msg-123" }],
       reflection: "The task was waiting on the owner and now has fresh direction.",
       todoSnapshot: "# TODO\n\n[ACTIONABLE]\n- Reply to Alice\n\n[BLOCKED]\n- none\n\n[DONE]\n- Drafted response",
-      actionNow: 'Use read_email with messageId "msg-123" to read the owner email, then act on it.',
+      actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
       configChanged: true,
       configChangedFields: ["soul", "tools"],
       configSnapshot: {
@@ -76,11 +76,37 @@ describe("prompt context helpers", () => {
     expect(message).toContain("WOKEN BY: owner");
     expect(message).toContain("PRIOR STATE: SLEEPING");
     expect(message).toContain("MESSAGE_ID: msg-123");
-    expect(message).toContain("Config changed: yes");
+    expect(message).toContain("## WHAT CHANGED");
     expect(message).toContain("Changed fields: soul, tools");
+    expect(message).toContain("### UPDATED CONFIG SNAPSHOT");
     expect(message).toContain("## WAKE REFLECTION");
     expect(message).toContain("## TODO SNAPSHOT");
     expect(message).toContain("[ACTIONABLE]");
+    expect(message).toContain("## ACTION NOW");
+    // MESSAGE_ID lives in the metadata slot only — not duplicated in trigger
+    // context or action-now prose.
+    expect((message.match(/msg-123/g) ?? []).length).toBe(1);
+  });
+
+  it("omits the WHAT CHANGED section when the config has not changed", () => {
+    const message = buildWakeMessage({
+      wokenBy: "owner",
+      priorState: "SLEEPING",
+      lastStopReason: "Waiting for owner input",
+      triggerContext: "Owner sent a message.",
+      metadata: [{ label: "MESSAGE_ID", value: "msg-456" }],
+      reflection: "Owner replied; resume.",
+      actionNow: "Use read_email with the MESSAGE_ID above to read the owner email.",
+      configChanged: false,
+      configChangedFields: [],
+    });
+
+    expect(message).not.toContain("WHAT CHANGED");
+    expect(message).not.toContain("Changed fields");
+    expect(message).not.toContain("Config changed");
+    // The non-config sections are still rendered.
+    expect(message).toContain("## TRIGGER METADATA");
+    expect(message).toContain("## WAKE REFLECTION");
     expect(message).toContain("## ACTION NOW");
   });
 });
