@@ -1,4 +1,4 @@
-import type { ConversationRow, TurnLogRow } from "@/app/agents/[id]/lib/conversation";
+import type { ConversationRow, TurnLogRow } from "@/lib/conversation";
 
 export type TaskRuntimeSnapshotView = {
   phase: string;

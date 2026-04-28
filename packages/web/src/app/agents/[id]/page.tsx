@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+import { permanentRedirect } from "next/navigation";
 import { controlPlanePath } from "@/lib/control-plane-paths";
 
 interface AgentDetailPageProps {
@@ -7,5 +7,5 @@ interface AgentDetailPageProps {
 
 export default async function AgentDetailPage({ params }: AgentDetailPageProps) {
   const { id } = await params;
-  redirect(controlPlanePath(id, "root"));
+  permanentRedirect(controlPlanePath(id, "root"));
 }

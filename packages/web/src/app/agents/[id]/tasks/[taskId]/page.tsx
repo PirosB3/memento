@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation";
+import { permanentRedirect } from "next/navigation";
 import { controlPlanePath } from "@/lib/control-plane-paths";
 
 interface TaskDetailPageProps {
@@ -10,5 +10,5 @@ interface TaskDetailPageProps {
 
 export default async function TaskDetailPage({ params }: TaskDetailPageProps) {
   const { id, taskId } = await params;
-  redirect(controlPlanePath(id, taskId));
+  permanentRedirect(controlPlanePath(id, taskId));
 }

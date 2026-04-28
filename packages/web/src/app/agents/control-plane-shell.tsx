@@ -26,8 +26,8 @@ import {
   stripAnsi,
   summarizeToolArgs,
   type DisplayBlock,
-} from "./[id]/lib/conversation";
-import { mergeOverlay, useTurnStream } from "./[id]/lib/use-turn-stream";
+} from "@/lib/conversation";
+import { mergeOverlay, useTurnStream } from "@/lib/use-turn-stream";
 import ControlPlaneNewTaskForm from "./control-plane-new-task-form";
 import type {
   ControlPlaneAgentSummaryView,
