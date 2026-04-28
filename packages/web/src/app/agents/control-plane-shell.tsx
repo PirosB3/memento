@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Bot,
@@ -14,7 +16,7 @@ import {
   Wrench,
 } from "lucide-react";
 import MarkdownBody from "@/components/markdown-body";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { controlPlanePath } from "@/lib/control-plane-paths";
 import { cn } from "@/lib/utils";
 import { getDisplayedTaskStatus, getStatusDot } from "@/lib/task-status";
@@ -145,14 +147,20 @@ function AgentAvatar({
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-gradient-to-br text-xs font-semibold shadow-sm",
+        "relative flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-gradient-to-br text-xs font-semibold shadow-sm",
         gradient,
         className,
       )}
     >
       {src ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={`${name} avatar`} className="size-full object-cover" />
+        <Image
+          src={src}
+          alt={`${name} avatar`}
+          fill
+          sizes="44px"
+          className="object-cover"
+          unoptimized
+        />
       ) : (
         <span>{initials(name)}</span>
       )}
@@ -534,18 +542,19 @@ function TaskRow({
   task,
   selected,
   agentEmail,
-  onSelect,
+  href,
 }: {
   task: TaskSummaryView;
   selected: boolean;
   agentEmail: string;
-  onSelect: () => void;
+  href: string;
 }) {
   const status = getDisplayedTaskStatus(task);
   return (
-    <button
-      type="button"
-      onClick={onSelect}
+    <Link
+      href={href}
+      scroll={false}
+      aria-current={selected ? "page" : undefined}
       className={cn(
         "group flex w-full items-start gap-2 rounded-lg px-2.5 py-2.5 text-left transition-colors",
         selected ? "bg-slate-100 text-foreground shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-foreground",
@@ -561,7 +570,7 @@ function TaskRow({
         </span>
       </span>
       {selected ? <StatusPill status={status} /> : null}
-    </button>
+    </Link>
   );
 }
 
@@ -662,7 +671,7 @@ export default function ControlPlaneShell({
     ));
   }, [allTasks, search, selectedAgent, view.agents]);
 
-  function selectTask(agentId: string, taskKey: string) {
+  function navigateToTask(agentId: string, taskKey: string) {
     router.push(controlPlanePath(agentId, taskKey), { scroll: false });
   }
 
@@ -675,10 +684,10 @@ export default function ControlPlaneShell({
           </div>
           <h1 className="text-lg font-semibold text-foreground">Memento Control Plane</h1>
           <p className="mt-2 text-sm text-muted-foreground">No agents have been created yet.</p>
-          <Button className="mt-5" onClick={() => router.push("/agents/new")}>
+          <Link href="/agents/new" className={buttonVariants({ className: "mt-5" })}>
             <Plus data-icon="inline-start" />
             New Agent
-          </Button>
+          </Link>
         </div>
       </div>
     );
@@ -696,9 +705,13 @@ export default function ControlPlaneShell({
               <h1 className="truncate text-sm font-semibold">Memento Control Plane</h1>
               <p className="text-xs text-muted-foreground">{view.agents.length} agents</p>
             </div>
-            <Button size="icon-sm" aria-label="Create agent" onClick={() => router.push("/agents/new")}>
+            <Link
+              href="/agents/new"
+              className={buttonVariants({ size: "icon-sm" })}
+              aria-label="Create agent"
+            >
               <Plus />
-            </Button>
+            </Link>
           </div>
 
           <div className="border-b border-border p-3">
@@ -728,9 +741,10 @@ export default function ControlPlaneShell({
                       selected && "border-border bg-white shadow-sm",
                     )}
                   >
-                    <button
-                      type="button"
-                      onClick={() => selectTask(agent.agentId, "root")}
+                    <Link
+                      href={controlPlanePath(agent.agentId, "root")}
+                      scroll={false}
+                      aria-current={selected && selectedTask?.key === "root" ? "page" : undefined}
                       className={cn(
                         "flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors",
                         selected ? "bg-white" : "hover:bg-white/80",
@@ -750,7 +764,7 @@ export default function ControlPlaneShell({
                         </span>
                       </span>
                       {selected ? <ChevronDown className="text-muted-foreground" /> : <ChevronRight className="text-muted-foreground" />}
-                    </button>
+                    </Link>
 
                     {selectedAgent && selected && (
                       <div className="flex flex-col gap-2 border-t border-slate-100 px-2 py-2">
@@ -758,7 +772,7 @@ export default function ControlPlaneShell({
                           key={selectedAgent.agentId}
                           agentId={selectedAgent.agentId}
                           disabled={rootTask?.workflowStatus !== "RUNNING"}
-                          onCreated={(taskId) => selectTask(selectedAgent.agentId, taskId)}
+                          onCreated={(taskId) => navigateToTask(selectedAgent.agentId, taskId)}
                         />
                         <div className="flex flex-col gap-1">
                           {filteredTasks.map((task) => (
@@ -767,7 +781,7 @@ export default function ControlPlaneShell({
                               task={task}
                               selected={selectedTask?.key === (task.isRoot ? "root" : task.taskId)}
                               agentEmail={selectedAgent.agentEmail}
-                              onSelect={() => selectTask(selectedAgent.agentId, task.isRoot ? "root" : task.taskId)}
+                              href={controlPlanePath(selectedAgent.agentId, task.isRoot ? "root" : task.taskId)}
                             />
                           ))}
                         </div>
