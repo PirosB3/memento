@@ -19,7 +19,7 @@ import MarkdownBody from "@/components/markdown-body";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { controlPlanePath } from "@/lib/control-plane-paths";
 import { cn } from "@/lib/utils";
-import { getDisplayedTaskStatus, getStatusDot } from "@/lib/task-status";
+import { getDisplayedTaskStatus, getStatusDot, getTaskMessageAction } from "@/lib/task-status";
 import {
   buildDisplayBlocks,
   formatJson,
@@ -437,15 +437,28 @@ function Composer({
   const [message, setMessage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const isRunning = task.detail.workflowStatus === "RUNNING";
-  const endpoint = task.detail.isRoot
-    ? `/api/agents/${agentId}/wake`
-    : `/api/agents/${agentId}/tasks/${task.detail.taskId}/wake`;
+  const messageAction = getTaskMessageAction(task.detail);
+  const canSendMessage = messageAction !== "disabled";
+  let taskKind: "root" | "child" = "child";
+  if (task.detail.isRoot) {
+    taskKind = "root";
+  }
+  const wakeEndpointByTaskKind: Record<typeof taskKind, string> = {
+    root: `/api/agents/${agentId}/wake`,
+    child: `/api/agents/${agentId}/tasks/${task.detail.taskId}/wake`,
+  };
+  const endpointByAction = {
+    wake: wakeEndpointByTaskKind[taskKind],
+    "restart-with-message": `/api/agents/${agentId}/tasks/${task.detail.taskId}/restart`,
+    disabled: null,
+  };
+  const endpoint = endpointByAction[messageAction];
+  const messageInputDisabled = !canSendMessage || pending;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = message.trim();
-    if (!trimmed || !isRunning) return;
+    if (!trimmed || !endpoint) return;
 
     setError(null);
     setPending(true);
@@ -479,7 +492,7 @@ function Composer({
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder={task.detail.isRoot ? "Message Root Task" : "Message Task"}
-            disabled={!isRunning || pending}
+            disabled={messageInputDisabled}
             className="max-h-40 min-h-7 flex-1 resize-none border-0 bg-transparent text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={1}
             onKeyDown={(event) => {
@@ -493,15 +506,15 @@ function Composer({
             type="submit"
             size="icon"
             className="rounded-full"
-            disabled={!isRunning || pending || !message.trim()}
+            disabled={messageInputDisabled || !message.trim()}
             aria-label="Send message"
           >
             <Send />
           </Button>
         </div>
-        {!isRunning && (
+        {!canSendMessage && (
           <p className="mt-2 text-xs text-muted-foreground">
-            This workflow is stopped. Restart it before sending messages.
+            This task cannot receive owner messages in its current state.
           </p>
         )}
         {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
