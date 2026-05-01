@@ -1,3 +1,5 @@
+## NOTE: This is a personal project, not production-grade
+
 # Memento
 
 ![Memento](./docs/images/memento-hero.jpg)
