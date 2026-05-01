@@ -320,16 +320,26 @@ function Composer({
   const [pending, setPending] = useState(false);
   const messageAction = getTaskMessageAction(task.detail);
   const canSendMessage = messageAction !== "disabled";
-  const endpoint = messageAction === "restart-with-message"
-    ? `/api/agents/${agentId}/tasks/${task.detail.taskId}/restart`
-    : task.detail.isRoot
-      ? `/api/agents/${agentId}/wake`
-      : `/api/agents/${agentId}/tasks/${task.detail.taskId}/wake`;
+  let taskKind: "root" | "child" = "child";
+  if (task.detail.isRoot) {
+    taskKind = "root";
+  }
+  const wakeEndpointByTaskKind: Record<typeof taskKind, string> = {
+    root: `/api/agents/${agentId}/wake`,
+    child: `/api/agents/${agentId}/tasks/${task.detail.taskId}/wake`,
+  };
+  const endpointByAction = {
+    wake: wakeEndpointByTaskKind[taskKind],
+    "restart-with-message": `/api/agents/${agentId}/tasks/${task.detail.taskId}/restart`,
+    disabled: null,
+  };
+  const endpoint = endpointByAction[messageAction];
+  const messageInputDisabled = !canSendMessage || pending;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmed = message.trim();
-    if (!trimmed || !canSendMessage) return;
+    if (!trimmed || !endpoint) return;
 
     setError(null);
     setPending(true);
@@ -363,7 +373,7 @@ function Composer({
             value={message}
             onChange={(event) => setMessage(event.target.value)}
             placeholder={task.detail.isRoot ? "Message Root Task" : "Message Task"}
-            disabled={!canSendMessage || pending}
+            disabled={messageInputDisabled}
             className="max-h-40 min-h-7 flex-1 resize-none border-0 bg-transparent text-sm leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-60"
             rows={1}
             onKeyDown={(event) => {
@@ -377,7 +387,7 @@ function Composer({
             type="submit"
             size="icon"
             className="rounded-full"
-            disabled={!canSendMessage || pending || !message.trim()}
+            disabled={messageInputDisabled || !message.trim()}
             aria-label="Send message"
           >
             <Send />
