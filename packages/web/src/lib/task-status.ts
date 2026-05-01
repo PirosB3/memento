@@ -3,6 +3,14 @@ type TaskStatusLike = {
   workflowStatus: "RUNNING" | "STOPPED";
 };
 
+type MessageableTaskLike = TaskStatusLike & {
+  isRoot: boolean;
+};
+
+export type TaskMessageAction = "wake" | "restart-with-message" | "disabled";
+
+const MESSAGEABLE_STATUSES = new Set(["SLEEPING", "COMPLETED", "ESCALATED"]);
+
 export function getStatusDot(status: string) {
   const map: Record<string, string> = {
     RUNNING: "status-dot-running",
@@ -30,4 +38,20 @@ export function isStreamingStatus(status: string, workflowStatus: string): boole
 
 export function getDisplayedTaskStatus(task: TaskStatusLike): string {
   return task.workflowStatus === "STOPPED" ? "STOPPED" : task.status;
+}
+
+export function getTaskMessageAction(task: MessageableTaskLike): TaskMessageAction {
+  if (!MESSAGEABLE_STATUSES.has(task.status)) {
+    return "disabled";
+  }
+
+  if (task.workflowStatus === "RUNNING") {
+    return "wake";
+  }
+
+  if (!task.isRoot) {
+    return "restart-with-message";
+  }
+
+  return "disabled";
 }
