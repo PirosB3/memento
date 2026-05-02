@@ -49,6 +49,7 @@ const log = createLogger("pi-turn");
 export async function runPiAgentTurnImpl(
   taskId: string,
   _turnLogId: number,
+  blockedEmailIds: string[] = [],
 ): Promise<DecisionResult> {
   const taskLog = log.child(`task:${taskId}`);
   taskLog.info("Starting Pi agent turn");
@@ -113,6 +114,7 @@ export async function runPiAgentTurnImpl(
         companyWebsite: process.env.COMPANY_WEBSITE?.trim() || null,
       }
     : null;
+  const emailReadOptions = blockedEmailIds.length > 0 ? { blockedMessageIds: blockedEmailIds } : undefined;
 
   // 7. Build tools based on root vs child
   const tools = isRoot
@@ -120,9 +122,9 @@ export async function runPiAgentTurnImpl(
         // Root: unfiltered email tools, base address
         createSendEmailTool(agent.agentEmail, agentDir, undefined, signature),
         createReplyEmailTool(agent.agentEmail, agentDir, undefined, signature),
-        createReadEmailTool(agent.agentEmail, agent.ownerEmail),
-        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
-        createReadEmailsTool(agent.agentEmail),
+        createReadEmailTool(agent.agentEmail, agent.ownerEmail, emailReadOptions),
+        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir, emailReadOptions),
+        createReadEmailsTool(agent.agentEmail, emailReadOptions),
         createListThreadsTool(agent.agentEmail),
         // Root: task management tools
         createSpawnTaskTool(agent.agentId, agent.agentEmail),
@@ -145,9 +147,9 @@ export async function runPiAgentTurnImpl(
         // Child: filtered email tools, +tag address
         createSendEmailTool(agent.agentEmail, agentDir, task.tag, signature),
         createReplyEmailTool(agent.agentEmail, agentDir, task.tag, signature),
-        createReadEmailTool(agent.agentEmail, agent.ownerEmail),
-        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
-        createFilteredReadEmailsTool(agent.agentEmail, task.tag),
+        createReadEmailTool(agent.agentEmail, agent.ownerEmail, emailReadOptions),
+        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir, emailReadOptions),
+        createFilteredReadEmailsTool(agent.agentEmail, task.tag, emailReadOptions),
         createFilteredListThreadsTool(agent.agentEmail, task.tag),
         // Schedule tools
         createCreateScheduleTool(task.taskId, agent.agentId, false),

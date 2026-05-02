@@ -51,6 +51,7 @@ interface Activities {
       };
     },
   ): Promise<{ contextSeedMessage: string | null; wakeMessage: string }>;
+  screenInboundEmailBatch(taskId: string, emails: InboundEmail[]): Promise<ScreenInboundEmailBatchResult>;
   runReflection(
     taskId: string,
     turnLogId: number,
@@ -59,7 +60,7 @@ interface Activities {
     priorState: string,
     lastStopReason: string | null,
   ): Promise<string>;
-  runPiAgentTurn(taskId: string, turnLogId: number): Promise<DecisionResult>;
+  runPiAgentTurn(taskId: string, turnLogId: number, blockedEmailIds?: string[]): Promise<DecisionResult>;
   runActivityGate(
     agentId: string,
     windowHours?: number,
@@ -72,6 +73,12 @@ interface Activities {
   runChildReflectionStep(childTaskId: string): Promise<string>;
 }
 
+interface ScreenInboundEmailBatchResult {
+  approvedMessageIds: string[];
+  rejectedMessageIds: string[];
+  summary: string;
+}
+
 const {
   loadTaskFromDb,
   updateTaskStatus,
@@ -81,6 +88,7 @@ const {
   updateTurnLogReflection,
   updateTurnLogStopReason,
   preparePromptMessages,
+  screenInboundEmailBatch,
   runReflection,
   runPiAgentTurn,
   runActivityGate,
@@ -212,6 +220,29 @@ function persistScheduleSnapshot(snapshot: ScheduleWorkflowRuntimeSnapshot): voi
   upsertMemo({
     [SCHEDULE_RUNTIME_MEMO_KEY_NAME]: snapshot,
   });
+}
+
+function expandEmailBatch(emails: InboundEmail[]): Array<{ messageId: string; sender: string }> {
+  return emails.flatMap((email) => {
+    const messageIds = email.batchMessageIds ?? [email.messageId];
+    const senders = email.batchSenders ?? [email.sender];
+    return messageIds.map((messageId, index) => ({
+      messageId,
+      sender: senders[index] ?? email.sender,
+    }));
+  });
+}
+
+function approvedEmailSummary(
+  emails: InboundEmail[],
+  screening: ScreenInboundEmailBatchResult,
+): { messageIds: string[]; senders: string[] } {
+  const approved = new Set(screening.approvedMessageIds);
+  const expanded = expandEmailBatch(emails).filter((email) => approved.has(email.messageId));
+  return {
+    messageIds: expanded.map((email) => email.messageId),
+    senders: expanded.map((email) => email.sender),
+  };
 }
 
 async function insertPromptMessagesForTurn(
@@ -362,6 +393,7 @@ async function processWakeTurn(
     priorState: string;
     turnState: { turnNumber: number; lastStopReason: string | null };
     setRunningState: () => Promise<void>;
+    blockedEmailIds?: string[];
   },
 ): Promise<DecisionResult> {
   options.turnState.turnNumber++;
@@ -392,7 +424,7 @@ async function processWakeTurn(
     reflection,
   );
 
-  const decision = await runPiAgentTurn(taskId, turnLogId);
+  const decision = await runPiAgentTurn(taskId, turnLogId, options.blockedEmailIds);
   await updateTurnLogStopReason(turnLogId, decision.stopReason);
   options.turnState.lastStopReason = decision.stopReason;
   return decision;
@@ -745,6 +777,7 @@ async function activeLoop(
     }
 
     let wake: WakeDetails;
+    let blockedEmailIdsForTurn: string[] | undefined;
 
     if (ownerQueue.length > 0) {
       const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
@@ -787,17 +820,23 @@ async function activeLoop(
       };
     } else if (emailQueue.length > 0) {
       const emails = emailQueue.splice(0);
-      const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
-      const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
+      const screening = await screenInboundEmailBatch(taskId, emails);
+      if (screening.approvedMessageIds.length === 0) {
+        turnState.lastStopReason = screening.summary;
+        continue;
+      }
+      blockedEmailIdsForTurn = screening.rejectedMessageIds;
+      const approved = approvedEmailSummary(emails, screening);
       wake = {
         trigger: "email",
         wokenBy: "email",
-        triggerContext: `Received ${allMessageIds.length} email(s) from: ${allSenders.join(", ")}`,
+        triggerContext: `Received ${approved.messageIds.length} approved email(s) from: ${approved.senders.join(", ")}. ${screening.rejectedMessageIds.length} email(s) were rejected by the security screener.`,
         metadata: [
-          { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
-          { label: "SENDERS", value: allSenders.join(", ") },
+          { label: "MESSAGE_IDS", value: approved.messageIds.join(", ") },
+          { label: "SENDERS", value: approved.senders.join(", ") },
+          { label: "EMAIL_SCREENING", value: screening.summary },
         ],
-        actionNow: "Use read_emails or list_threads to pull the full batch and respond holistically.",
+        actionNow: "Use read_email only with the approved MESSAGE_IDS above, then respond holistically.",
       };
     } else {
       wake = {
@@ -816,6 +855,7 @@ async function activeLoop(
       priorState: currentState,
       turnState,
       setRunningState: runtime.setRunningState,
+      blockedEmailIds: blockedEmailIdsForTurn,
     });
     currentState = "RUNNING";
 
@@ -913,6 +953,7 @@ async function dormantLoop(
     }
 
     let wake: WakeDetails;
+    let blockedEmailIdsForTurn: string[] | undefined;
 
     if (ownerQueue.length > 0) {
       const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
@@ -955,17 +996,23 @@ async function dormantLoop(
       };
     } else {
       const emails = emailQueue.splice(0);
-      const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
-      const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
+      const screening = await screenInboundEmailBatch(taskId, emails);
+      if (screening.approvedMessageIds.length === 0) {
+        turnState.lastStopReason = screening.summary;
+        continue;
+      }
+      blockedEmailIdsForTurn = screening.rejectedMessageIds;
+      const approved = approvedEmailSummary(emails, screening);
       wake = {
         trigger: "email",
         wokenBy: "email",
-        triggerContext: `Received ${allMessageIds.length} email(s) to completed task. Reanimating.`,
+        triggerContext: `Received ${approved.messageIds.length} approved email(s) to completed task. Reanimating. ${screening.rejectedMessageIds.length} email(s) were rejected by the security screener.`,
         metadata: [
-          { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
-          { label: "SENDERS", value: allSenders.join(", ") },
+          { label: "MESSAGE_IDS", value: approved.messageIds.join(", ") },
+          { label: "SENDERS", value: approved.senders.join(", ") },
+          { label: "EMAIL_SCREENING", value: screening.summary },
         ],
-        actionNow: "Use read_emails or list_threads to inspect the new batch and decide whether to resume the task.",
+        actionNow: "Use read_email only with the approved MESSAGE_IDS above, then decide whether to resume the task.",
       };
     }
 
@@ -974,6 +1021,7 @@ async function dormantLoop(
       priorState: "COMPLETED",
       turnState,
       setRunningState,
+      blockedEmailIds: blockedEmailIdsForTurn,
     });
 
     if (decision.type === "complete" || decision.type === "fail") {
