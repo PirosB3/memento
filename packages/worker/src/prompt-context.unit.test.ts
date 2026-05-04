@@ -57,6 +57,7 @@ describe("prompt context helpers", () => {
   it("builds a wake message with config deltas and reflection", () => {
     const message = buildWakeMessage({
       wokenBy: "owner",
+      channel: "email",
       priorState: "SLEEPING",
       lastStopReason: "Waiting for owner input",
       triggerContext: "Owner sent a message.",
@@ -74,11 +75,14 @@ describe("prompt context helpers", () => {
     });
 
     expect(message).toContain("WOKEN BY: owner");
+    expect(message).toContain("WAKE CHANNEL: email");
     expect(message).toContain("PRIOR STATE: SLEEPING");
     expect(message).toContain("MESSAGE_ID: msg-123");
     expect(message).toContain("## WHAT CHANGED");
     expect(message).toContain("Changed fields: soul, tools");
     expect(message).toContain("### UPDATED CONFIG SNAPSHOT");
+    expect(message).toContain("## REPLY CHANNEL RULE");
+    expect(message).toContain("reply_email");
     expect(message).toContain("## WAKE REFLECTION");
     expect(message).toContain("## TODO SNAPSHOT");
     expect(message).toContain("[ACTIONABLE]");
@@ -91,6 +95,7 @@ describe("prompt context helpers", () => {
   it("omits the WHAT CHANGED section when the config has not changed", () => {
     const message = buildWakeMessage({
       wokenBy: "owner",
+      channel: "email",
       priorState: "SLEEPING",
       lastStopReason: "Waiting for owner input",
       triggerContext: "Owner sent a message.",
@@ -108,5 +113,26 @@ describe("prompt context helpers", () => {
     expect(message).toContain("## TRIGGER METADATA");
     expect(message).toContain("## WAKE REFLECTION");
     expect(message).toContain("## ACTION NOW");
+  });
+
+  it("emits a UI-channel reply rule for inline owner wakes", () => {
+    const message = buildWakeMessage({
+      wokenBy: "owner",
+      channel: "ui",
+      priorState: "SLEEPING",
+      lastStopReason: null,
+      triggerContext: "Received an inline wake from owner direct message with message: please summarize.",
+      metadata: [
+        { label: "SOURCE", value: "owner" },
+        { label: "INLINE_MESSAGE", value: "please summarize." },
+      ],
+      reflection: "Owner pinged from the dashboard.",
+      actionNow: "Act on the inline instruction: please summarize.",
+      configChanged: false,
+    });
+
+    expect(message).toContain("WAKE CHANNEL: ui");
+    expect(message).toContain("dashboard");
+    expect(message).toContain("do NOT");
   });
 });

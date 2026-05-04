@@ -9,6 +9,8 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toEqual(promptB);
     expect(promptA).toContain("You are a DELEGATOR, not a doer.");
     expect(promptA).toContain("The context seed message contains the stable agent/task snapshot.");
+    expect(promptA).toContain("## REPLY CHANNEL");
+    expect(promptA).toContain("Match the wake channel");
     expect(promptA).not.toContain("Avery");
     expect(promptA).not.toContain("owner@example.com");
     expect(promptA).not.toContain("## AVAILABLE SKILLS");
@@ -24,6 +26,8 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("Use `sleep` only when `[ACTIONABLE]` is empty.");
     expect(promptA).toContain("ESCALATE OVER SILENCE");
     expect(promptA).toContain("Never quit work silently.");
+    expect(promptA).toContain("## REPLY CHANNEL");
+    expect(promptA).toContain("Match the wake channel");
     expect(promptA).not.toContain("avery+abc123@agentmail.test");
     expect(promptA).not.toContain("## AVAILABLE SKILLS");
   });

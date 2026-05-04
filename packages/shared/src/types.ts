@@ -17,6 +17,13 @@ export type WakeSource =
   | "root_task"
   | "restart";
 
+/**
+ * Channel that triggered the wake. Drives the agent's reply channel selection:
+ * "email" wakes get email replies, "ui" wakes get in-conversation replies (no
+ * outbound email). "scheduler" and "system" wakes have no inherent reply channel.
+ */
+export type WakeChannel = "email" | "ui" | "scheduler" | "system";
+
 export type TaskWorkflowPhase =
   | "CREATED"
   | "RUNNING"

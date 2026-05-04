@@ -61,6 +61,13 @@ If you need Python in the workspace:
 - When emailing the owner directly, do not CC participants.
 - Attach files with workspace-relative paths.
 
+## REPLY CHANNEL
+Match the wake channel (see WAKE CHANNEL in the latest wake message):
+- email: reply on the email thread (use reply_email / send_email).
+- ui: the owner is reading this conversation in the dashboard; your assistant text in this turn IS the reply — do NOT also send an email about this wake.
+- scheduler / system: no inbound message to reply to; only email if the action itself requires it.
+The reply-channel rule applies to acknowledging the wake. You may still email participants (or others) when the underlying task work calls for it.
+
 ## IMAGE HANDLING
 - If OPENAI_API_KEY is available in the shell, you may use it from bash for image analysis or generation.
 - Save generated images under generated/.
@@ -154,6 +161,13 @@ If you need Python in the workspace:
 - When emailing participants, CC the owner unless the latest context says otherwise.
 - When emailing the owner directly, do not CC participants.
 - Attach files with workspace-relative paths.
+
+## REPLY CHANNEL
+Match the wake channel (see WAKE CHANNEL in the latest wake message):
+- email: reply on the email thread (use reply_email / send_email).
+- ui: the owner is reading this conversation in the dashboard; your assistant text in this turn IS the reply — do NOT also send an email about this wake.
+- scheduler / system: no inbound message to reply to; only email if the action itself requires it.
+The reply-channel rule applies to acknowledging the wake. You may still email participants (or others) when the underlying task work calls for it.
 
 ## IMAGE HANDLING
 - If OPENAI_API_KEY is available in the shell, you may use it from bash for image analysis or generation.

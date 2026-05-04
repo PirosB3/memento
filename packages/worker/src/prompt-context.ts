@@ -1,5 +1,5 @@
 import type { Agent, Task } from "@prisma/client";
-import type { WakeSource } from "@summon/shared";
+import type { WakeChannel, WakeSource } from "@summon/shared";
 
 export interface WakeMetadataItem {
   label: string;
@@ -8,6 +8,7 @@ export interface WakeMetadataItem {
 
 export interface BuildWakeMessageInput {
   wokenBy: WakeSource;
+  channel: WakeChannel;
   priorState: string;
   lastStopReason?: string | null;
   triggerContext: string;
@@ -22,6 +23,19 @@ export interface BuildWakeMessageInput {
     boundaries: string;
     tools: string;
   };
+}
+
+function describeChannelReplyRule(channel: WakeChannel): string {
+  switch (channel) {
+    case "email":
+      return "Reply on the email thread that woke you (use reply_email / send_email). Do not respond only via in-conversation text.";
+    case "ui":
+      return "The owner is watching this conversation in the dashboard. Your assistant text in this turn IS the reply — do NOT send an email back to the owner about this wake.";
+    case "scheduler":
+      return "Scheduler wake — there is no inbound message to reply to. Act on the reminder; only email if the action itself requires it.";
+    case "system":
+      return "System wake (created / restart / sleep timeout) — there is no inbound message to reply to. Continue the task and only email if the action itself requires it.";
+  }
 }
 
 function taskEmailFor(agent: Agent, task: Task): string {
@@ -82,8 +96,12 @@ ${input.todoSnapshot}`
 
   return `## WAKE
 WOKEN BY: ${input.wokenBy}
+WAKE CHANNEL: ${input.channel}
 PRIOR STATE: ${input.priorState}
 LAST STOP REASON: ${input.lastStopReason ?? "none"}
+
+## REPLY CHANNEL RULE
+${describeChannelReplyRule(input.channel)}
 
 ## TRIGGER CONTEXT
 ${input.triggerContext}
