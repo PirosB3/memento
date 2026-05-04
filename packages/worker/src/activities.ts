@@ -9,8 +9,21 @@ import {
 } from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 import type { DecisionResult, AgentStatus, TaskStatus, TaskInfo } from "@summon/shared";
+import type { InboundEmail } from "@summon/shared";
 import { runPiAgentTurnImpl } from "./pi-turn.js";
 import { runReflectionImpl, runChildReflectionStepImpl } from "./reflection.js";
+import { runEmailScreener } from "./email-screener.js";
+import {
+  buildFailClosedScreening,
+  type EmailForScreening,
+  type ScreenedEmailDecision,
+  type ScreenInboundEmailBatchResult,
+} from "./email-screener-validation.js";
+import {
+  extractEmailAddress,
+  getAgentMailClient,
+  normalizeAddressList,
+} from "./tools/agentmail-tools.js";
 import { Client, Connection } from "@temporalio/client";
 import crypto from "crypto";
 import fs from "fs";
@@ -34,6 +47,7 @@ async function getTemporalClient(): Promise<Client> {
 }
 
 const log = createLogger("activities");
+const EMAIL_SCREENING_TIMEOUT_MS = 120_000;
 const AGENTS_DIR = getAgentsDir();
 const CONFIG_SNAPSHOT_FILE = ".config_snapshot.json";
 
@@ -50,6 +64,7 @@ export interface Activities {
   updateTurnLogReflection: typeof updateTurnLogReflection;
   updateTurnLogStopReason: typeof updateTurnLogStopReason;
   preparePromptMessages: typeof preparePromptMessages;
+  screenInboundEmailBatch: typeof screenInboundEmailBatch;
   runReflection: typeof runReflection;
   runPiAgentTurn: typeof runPiAgentTurn;
   runActivityGate: typeof runActivityGate;
@@ -324,6 +339,152 @@ export async function preparePromptMessages(
   };
 }
 
+export async function screenInboundEmailBatch(
+  taskId: string,
+  emails: InboundEmail[],
+): Promise<ScreenInboundEmailBatchResult> {
+  const messageIds = uniqueMessageIds(emails);
+  if (messageIds.length === 0) {
+    return { approvedMessageIds: [], rejectedMessageIds: [], decisions: [], summary: "No inbound emails to screen." };
+  }
+
+  const task = await prisma.task.findUniqueOrThrow({ where: { taskId } });
+  const agent = await prisma.agent.findUniqueOrThrow({ where: { agentId: task.agentId } });
+  const agentmail = getAgentMailClient();
+
+  let result: ScreenInboundEmailBatchResult;
+  try {
+    const fetchedEmails = await withTimeout(
+      Promise.all(messageIds.map((messageId) => fetchEmailForScreening(agentmail, agent.agentEmail, messageId))),
+      EMAIL_SCREENING_TIMEOUT_MS,
+      "Email screening timed out",
+    );
+    result = await withTimeout(
+      runEmailScreener({
+        taskObjective: task.objective,
+        ownerEmail: agent.ownerEmail,
+        agentEmail: agent.agentEmail,
+        emails: fetchedEmails,
+      }),
+      EMAIL_SCREENING_TIMEOUT_MS,
+      "Email screening timed out",
+    );
+  } catch (error) {
+    log.error(`Email screening failed closed for task=${taskId}`, error);
+    result = buildFailClosedScreening(emails.flatMap(toFallbackEmails));
+  }
+
+  await sendOwnerAlertsForRejected(agent, result.decisions);
+  return result;
+}
+
+function uniqueMessageIds(emails: InboundEmail[]): string[] {
+  const seen = new Set<string>();
+  for (const email of emails) {
+    for (const messageId of email.batchMessageIds ?? [email.messageId]) {
+      seen.add(messageId);
+    }
+  }
+  return [...seen];
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+function pickStringField(msg: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = msg[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
+}
+
+async function fetchEmailForScreening(
+  agentmail: ReturnType<typeof getAgentMailClient>,
+  inboxId: string,
+  messageId: string,
+): Promise<EmailForScreening> {
+  const msg = await agentmail.inboxes.messages.get(inboxId, messageId) as unknown as Record<string, unknown>;
+  const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+  const rawFrom = typeof msg.from === "string" ? msg.from : "";
+  return {
+    messageId,
+    sender: extractEmailAddress(rawFrom) || rawFrom,
+    subject: pickStringField(msg, "subject"),
+    threadId: pickStringField(msg, "threadId", "thread_id"),
+    to: normalizeAddressList(msg.to as string | string[] | undefined),
+    cc: normalizeAddressList(msg.cc as string | string[] | undefined),
+    timestamp: pickStringField(msg, "createdAt", "created_at", "timestamp") ?? new Date().toISOString(),
+    labels: Array.isArray(msg.labels) ? msg.labels.map(String) : [],
+    hasAttachments: attachments.length > 0,
+    body: String(msg.extractedText ?? msg.text ?? ""),
+  };
+}
+
+function toFallbackEmails(email: InboundEmail): EmailForScreening[] {
+  const messageIds = email.batchMessageIds ?? [email.messageId];
+  const senders = email.batchSenders ?? [email.sender];
+  return messageIds.map((messageId, index) => ({
+    messageId,
+    sender: senders[index] ?? email.sender,
+    subject: null,
+    threadId: null,
+    to: [email.inboxId],
+    cc: [],
+    timestamp: email.timestamp,
+    labels: [],
+    hasAttachments: false,
+    body: "",
+  }));
+}
+
+async function sendOwnerAlertsForRejected(
+  agent: { agentEmail: string; ownerEmail: string; name: string },
+  decisions: ScreenedEmailDecision[],
+): Promise<void> {
+  const rejected = decisions.filter((decision) => decision.disposition === "reject");
+  if (rejected.length === 0) return;
+
+  const agentmail = getAgentMailClient();
+  const sends = rejected.map((decision) =>
+    agentmail.inboxes.messages.send(agent.agentEmail, {
+      to: [agent.ownerEmail],
+      subject: `Security alert: ${agent.name} rejected an email`,
+      text: formatOwnerAlert(decision),
+    }).catch((error: unknown) => {
+      log.error(`Failed to alert owner for rejected email ${decision.messageId}`, error);
+    }),
+  );
+  await Promise.all(sends);
+}
+
+function formatOwnerAlert(decision: ScreenedEmailDecision): string {
+  return [
+    "An inbound email was rejected by the security screener and withheld from the agent.",
+    "",
+    `Message ID: ${decision.messageId}`,
+    `From: ${decision.sender || "unknown"}`,
+    `Subject: ${decision.subject ?? "(no subject)"}`,
+    `Risk: ${decision.riskLevel}`,
+    `Categories: ${decision.categories.join(", ")}`,
+    `Requested actions: ${decision.requestedActions.length ? decision.requestedActions.join(", ") : "none detected"}`,
+    `Reason: ${decision.reason}`,
+    "",
+    "The email body was not included in this alert.",
+  ].join("\n");
+}
+
 // --- Task management activities (used by root task's tools) ---
 
 export async function startChildTaskWorkflow(
@@ -493,10 +654,11 @@ export async function runReflection(
 export async function runPiAgentTurn(
   taskId: string,
   turnLogId: number,
+  blockedEmailIds: string[] = [],
 ): Promise<DecisionResult> {
   log.info(`Running Pi agent turn: task=${taskId} turnLog=${turnLogId}`);
   try {
-    const result = await runPiAgentTurnImpl(taskId, turnLogId);
+    const result = await runPiAgentTurnImpl(taskId, turnLogId, blockedEmailIds);
     log.info(`Pi agent turn completed: task=${taskId} decision=${result.type}`, { result });
     return result;
   } catch (err) {

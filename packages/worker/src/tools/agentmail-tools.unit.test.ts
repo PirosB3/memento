@@ -6,6 +6,7 @@ import {
   createDownloadEmailAttachmentTool,
   createFilteredReadEmailsTool,
   createReadEmailTool,
+  createReadEmailsTool,
   createReplyEmailTool,
   createSendEmailTool,
   setAgentMailClientForTests,
@@ -477,6 +478,46 @@ describe("agentmail tools", () => {
         senderEmail: "participant@example.com",
       },
     }));
+  });
+
+  it("read_email blocks messages rejected for the current turn", async () => {
+    const client = createAgentMailStub();
+    const tool = createReadEmailTool("avery@agentmail.test", "owner@example.com", ["msg-rejected"]);
+
+    const result = await tool.execute("call-read-rejected", { messageId: "msg-rejected" });
+
+    expect(client.inboxes.messages.get).not.toHaveBeenCalled();
+    expect(getText(result)).toContain("rejected by the security screener");
+    expect(result.details).toEqual(expect.objectContaining({ error: true }));
+  });
+
+  it("read_emails omits messages rejected for the current turn", async () => {
+    const client = createAgentMailStub();
+    client.inboxes.messages.list.mockResolvedValue({
+      messages: [
+        {
+          from: "person@example.com",
+          to: ["avery@agentmail.test"],
+          subject: "Allowed",
+          labels: ["received"],
+          messageId: "msg-ok",
+        },
+        {
+          from: "attacker@example.com",
+          to: ["avery@agentmail.test"],
+          subject: "Blocked",
+          labels: ["received"],
+          messageId: "msg-rejected",
+        },
+      ],
+    });
+
+    const tool = createReadEmailsTool("avery@agentmail.test", ["msg-rejected"]);
+    const result = await tool.execute("call-read-list", { limit: 10 });
+    const text = getText(result);
+
+    expect(text).toContain("Allowed");
+    expect(text).not.toContain("Blocked");
   });
 
   it("download_email_attachment saves an owner attachment to the default path", async () => {

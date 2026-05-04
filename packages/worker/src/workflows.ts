@@ -27,6 +27,7 @@ import {
   reflectionIsDue,
   timeUntilNextReflection,
 } from "./reflection-schedule";
+import type { ScreenInboundEmailBatchResult } from "./email-screener-validation";
 
 interface Activities {
   loadTaskFromDb(taskId: string): Promise<{ taskId: string; agentId: string; status: string; isRoot: boolean }>;
@@ -51,6 +52,7 @@ interface Activities {
       };
     },
   ): Promise<{ contextSeedMessage: string | null; wakeMessage: string }>;
+  screenInboundEmailBatch(taskId: string, emails: InboundEmail[]): Promise<ScreenInboundEmailBatchResult>;
   runReflection(
     taskId: string,
     turnLogId: number,
@@ -59,7 +61,7 @@ interface Activities {
     priorState: string,
     lastStopReason: string | null,
   ): Promise<string>;
-  runPiAgentTurn(taskId: string, turnLogId: number): Promise<DecisionResult>;
+  runPiAgentTurn(taskId: string, turnLogId: number, blockedEmailIds?: string[]): Promise<DecisionResult>;
   runActivityGate(
     agentId: string,
     windowHours?: number,
@@ -81,6 +83,7 @@ const {
   updateTurnLogReflection,
   updateTurnLogStopReason,
   preparePromptMessages,
+  screenInboundEmailBatch,
   runReflection,
   runPiAgentTurn,
   runActivityGate,
@@ -212,6 +215,41 @@ function persistScheduleSnapshot(snapshot: ScheduleWorkflowRuntimeSnapshot): voi
   upsertMemo({
     [SCHEDULE_RUNTIME_MEMO_KEY_NAME]: snapshot,
   });
+}
+
+async function screenAndBuildEmailWake(
+  taskId: string,
+  emails: InboundEmail[],
+  options: { reanimating: boolean },
+): Promise<{ wake: WakeDetails; blockedEmailIds: string[] } | { stopReason: string }> {
+  const screening = await screenInboundEmailBatch(taskId, emails);
+  if (screening.approvedMessageIds.length === 0) {
+    return { stopReason: screening.summary };
+  }
+
+  const approved = screening.decisions.filter((decision) => decision.disposition === "approve");
+  const messageIds = approved.map((decision) => decision.messageId);
+  const senders = approved.map((decision) => decision.sender);
+  const rejectedCount = screening.rejectedMessageIds.length;
+  const triggerContext = options.reanimating
+    ? `Received ${messageIds.length} approved email(s) to completed task. Reanimating. ${rejectedCount} email(s) were rejected by the security screener.`
+    : `Received ${messageIds.length} approved email(s) from: ${senders.join(", ")}. ${rejectedCount} email(s) were rejected by the security screener.`;
+  const actionSuffix = options.reanimating ? "decide whether to resume the task" : "respond holistically";
+
+  return {
+    blockedEmailIds: screening.rejectedMessageIds,
+    wake: {
+      trigger: "email",
+      wokenBy: "email",
+      triggerContext,
+      metadata: [
+        { label: "MESSAGE_IDS", value: messageIds.join(", ") },
+        { label: "SENDERS", value: senders.join(", ") },
+        { label: "EMAIL_SCREENING", value: screening.summary },
+      ],
+      actionNow: `Use read_email only with the approved MESSAGE_IDS above, then ${actionSuffix}.`,
+    },
+  };
 }
 
 async function insertPromptMessagesForTurn(
@@ -362,6 +400,7 @@ async function processWakeTurn(
     priorState: string;
     turnState: { turnNumber: number; lastStopReason: string | null };
     setRunningState: () => Promise<void>;
+    blockedEmailIds?: string[];
   },
 ): Promise<DecisionResult> {
   options.turnState.turnNumber++;
@@ -392,7 +431,7 @@ async function processWakeTurn(
     reflection,
   );
 
-  const decision = await runPiAgentTurn(taskId, turnLogId);
+  const decision = await runPiAgentTurn(taskId, turnLogId, options.blockedEmailIds);
   await updateTurnLogStopReason(turnLogId, decision.stopReason);
   options.turnState.lastStopReason = decision.stopReason;
   return decision;
@@ -745,6 +784,7 @@ async function activeLoop(
     }
 
     let wake: WakeDetails;
+    let blockedEmailIdsForTurn: string[] | undefined;
 
     if (ownerQueue.length > 0) {
       const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
@@ -786,19 +826,13 @@ async function activeLoop(
         actionNow: `Act on the scheduled reminder(s): ${schedules.map((sched) => `"${sched.message}"`).join(", ")}.`,
       };
     } else if (emailQueue.length > 0) {
-      const emails = emailQueue.splice(0);
-      const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
-      const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
-      wake = {
-        trigger: "email",
-        wokenBy: "email",
-        triggerContext: `Received ${allMessageIds.length} email(s) from: ${allSenders.join(", ")}`,
-        metadata: [
-          { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
-          { label: "SENDERS", value: allSenders.join(", ") },
-        ],
-        actionNow: "Use read_emails or list_threads to pull the full batch and respond holistically.",
-      };
+      const emailWake = await screenAndBuildEmailWake(taskId, emailQueue.splice(0), { reanimating: false });
+      if ("stopReason" in emailWake) {
+        turnState.lastStopReason = emailWake.stopReason;
+        continue;
+      }
+      wake = emailWake.wake;
+      blockedEmailIdsForTurn = emailWake.blockedEmailIds;
     } else {
       wake = {
         trigger: "sleep_timeout",
@@ -816,6 +850,7 @@ async function activeLoop(
       priorState: currentState,
       turnState,
       setRunningState: runtime.setRunningState,
+      blockedEmailIds: blockedEmailIdsForTurn,
     });
     currentState = "RUNNING";
 
@@ -913,6 +948,7 @@ async function dormantLoop(
     }
 
     let wake: WakeDetails;
+    let blockedEmailIdsForTurn: string[] | undefined;
 
     if (ownerQueue.length > 0) {
       const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
@@ -954,19 +990,13 @@ async function dormantLoop(
         actionNow: `Review the scheduled reminder(s) and determine whether the completed task should resume: ${schedules.map((sched) => `"${sched.message}"`).join(", ")}.`,
       };
     } else {
-      const emails = emailQueue.splice(0);
-      const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
-      const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
-      wake = {
-        trigger: "email",
-        wokenBy: "email",
-        triggerContext: `Received ${allMessageIds.length} email(s) to completed task. Reanimating.`,
-        metadata: [
-          { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
-          { label: "SENDERS", value: allSenders.join(", ") },
-        ],
-        actionNow: "Use read_emails or list_threads to inspect the new batch and decide whether to resume the task.",
-      };
+      const emailWake = await screenAndBuildEmailWake(taskId, emailQueue.splice(0), { reanimating: true });
+      if ("stopReason" in emailWake) {
+        turnState.lastStopReason = emailWake.stopReason;
+        continue;
+      }
+      wake = emailWake.wake;
+      blockedEmailIdsForTurn = emailWake.blockedEmailIds;
     }
 
     const decision = await processWakeTurn(taskId, wake, {
@@ -974,6 +1004,7 @@ async function dormantLoop(
       priorState: "COMPLETED",
       turnState,
       setRunningState,
+      blockedEmailIds: blockedEmailIdsForTurn,
     });
 
     if (decision.type === "complete" || decision.type === "fail") {
