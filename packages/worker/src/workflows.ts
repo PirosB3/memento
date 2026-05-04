@@ -27,6 +27,7 @@ import {
   reflectionIsDue,
   timeUntilNextReflection,
 } from "./reflection-schedule";
+import type { ScreenInboundEmailBatchResult } from "./email-screener-validation";
 
 interface Activities {
   loadTaskFromDb(taskId: string): Promise<{ taskId: string; agentId: string; status: string; isRoot: boolean }>;
@@ -71,12 +72,6 @@ interface Activities {
     summary: string;
   }>;
   runChildReflectionStep(childTaskId: string): Promise<string>;
-}
-
-interface ScreenInboundEmailBatchResult {
-  approvedMessageIds: string[];
-  rejectedMessageIds: string[];
-  summary: string;
 }
 
 const {
@@ -222,26 +217,38 @@ function persistScheduleSnapshot(snapshot: ScheduleWorkflowRuntimeSnapshot): voi
   });
 }
 
-function expandEmailBatch(emails: InboundEmail[]): Array<{ messageId: string; sender: string }> {
-  return emails.flatMap((email) => {
-    const messageIds = email.batchMessageIds ?? [email.messageId];
-    const senders = email.batchSenders ?? [email.sender];
-    return messageIds.map((messageId, index) => ({
-      messageId,
-      sender: senders[index] ?? email.sender,
-    }));
-  });
-}
-
-function approvedEmailSummary(
+async function screenAndBuildEmailWake(
+  taskId: string,
   emails: InboundEmail[],
-  screening: ScreenInboundEmailBatchResult,
-): { messageIds: string[]; senders: string[] } {
-  const approved = new Set(screening.approvedMessageIds);
-  const expanded = expandEmailBatch(emails).filter((email) => approved.has(email.messageId));
+  options: { reanimating: boolean },
+): Promise<{ wake: WakeDetails; blockedEmailIds: string[] } | { stopReason: string }> {
+  const screening = await screenInboundEmailBatch(taskId, emails);
+  if (screening.approvedMessageIds.length === 0) {
+    return { stopReason: screening.summary };
+  }
+
+  const approved = screening.decisions.filter((decision) => decision.disposition === "approve");
+  const messageIds = approved.map((decision) => decision.messageId);
+  const senders = approved.map((decision) => decision.sender);
+  const rejectedCount = screening.rejectedMessageIds.length;
+  const triggerContext = options.reanimating
+    ? `Received ${messageIds.length} approved email(s) to completed task. Reanimating. ${rejectedCount} email(s) were rejected by the security screener.`
+    : `Received ${messageIds.length} approved email(s) from: ${senders.join(", ")}. ${rejectedCount} email(s) were rejected by the security screener.`;
+  const actionSuffix = options.reanimating ? "decide whether to resume the task" : "respond holistically";
+
   return {
-    messageIds: expanded.map((email) => email.messageId),
-    senders: expanded.map((email) => email.sender),
+    blockedEmailIds: screening.rejectedMessageIds,
+    wake: {
+      trigger: "email",
+      wokenBy: "email",
+      triggerContext,
+      metadata: [
+        { label: "MESSAGE_IDS", value: messageIds.join(", ") },
+        { label: "SENDERS", value: senders.join(", ") },
+        { label: "EMAIL_SCREENING", value: screening.summary },
+      ],
+      actionNow: `Use read_email only with the approved MESSAGE_IDS above, then ${actionSuffix}.`,
+    },
   };
 }
 
@@ -819,25 +826,13 @@ async function activeLoop(
         actionNow: `Act on the scheduled reminder(s): ${schedules.map((sched) => `"${sched.message}"`).join(", ")}.`,
       };
     } else if (emailQueue.length > 0) {
-      const emails = emailQueue.splice(0);
-      const screening = await screenInboundEmailBatch(taskId, emails);
-      if (screening.approvedMessageIds.length === 0) {
-        turnState.lastStopReason = screening.summary;
+      const emailWake = await screenAndBuildEmailWake(taskId, emailQueue.splice(0), { reanimating: false });
+      if ("stopReason" in emailWake) {
+        turnState.lastStopReason = emailWake.stopReason;
         continue;
       }
-      blockedEmailIdsForTurn = screening.rejectedMessageIds;
-      const approved = approvedEmailSummary(emails, screening);
-      wake = {
-        trigger: "email",
-        wokenBy: "email",
-        triggerContext: `Received ${approved.messageIds.length} approved email(s) from: ${approved.senders.join(", ")}. ${screening.rejectedMessageIds.length} email(s) were rejected by the security screener.`,
-        metadata: [
-          { label: "MESSAGE_IDS", value: approved.messageIds.join(", ") },
-          { label: "SENDERS", value: approved.senders.join(", ") },
-          { label: "EMAIL_SCREENING", value: screening.summary },
-        ],
-        actionNow: "Use read_email only with the approved MESSAGE_IDS above, then respond holistically.",
-      };
+      wake = emailWake.wake;
+      blockedEmailIdsForTurn = emailWake.blockedEmailIds;
     } else {
       wake = {
         trigger: "sleep_timeout",
@@ -995,25 +990,13 @@ async function dormantLoop(
         actionNow: `Review the scheduled reminder(s) and determine whether the completed task should resume: ${schedules.map((sched) => `"${sched.message}"`).join(", ")}.`,
       };
     } else {
-      const emails = emailQueue.splice(0);
-      const screening = await screenInboundEmailBatch(taskId, emails);
-      if (screening.approvedMessageIds.length === 0) {
-        turnState.lastStopReason = screening.summary;
+      const emailWake = await screenAndBuildEmailWake(taskId, emailQueue.splice(0), { reanimating: true });
+      if ("stopReason" in emailWake) {
+        turnState.lastStopReason = emailWake.stopReason;
         continue;
       }
-      blockedEmailIdsForTurn = screening.rejectedMessageIds;
-      const approved = approvedEmailSummary(emails, screening);
-      wake = {
-        trigger: "email",
-        wokenBy: "email",
-        triggerContext: `Received ${approved.messageIds.length} approved email(s) to completed task. Reanimating. ${screening.rejectedMessageIds.length} email(s) were rejected by the security screener.`,
-        metadata: [
-          { label: "MESSAGE_IDS", value: approved.messageIds.join(", ") },
-          { label: "SENDERS", value: approved.senders.join(", ") },
-          { label: "EMAIL_SCREENING", value: screening.summary },
-        ],
-        actionNow: "Use read_email only with the approved MESSAGE_IDS above, then decide whether to resume the task.",
-      };
+      wake = emailWake.wake;
+      blockedEmailIdsForTurn = emailWake.blockedEmailIds;
     }
 
     const decision = await processWakeTurn(taskId, wake, {

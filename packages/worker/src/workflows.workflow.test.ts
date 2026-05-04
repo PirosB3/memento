@@ -229,7 +229,10 @@ describe("workflows", () => {
     const screenInboundEmailBatch = vi.fn().mockResolvedValue({
       approvedMessageIds: ["msg-ok"],
       rejectedMessageIds: ["msg-risky"],
-      decisions: [],
+      decisions: [
+        { messageId: "msg-ok", sender: "person@example.com", disposition: "approve" },
+        { messageId: "msg-risky", sender: "attacker@example.com", disposition: "reject" },
+      ],
       summary: "Email screening completed: 1 approved, 1 rejected.",
     });
     const runPiAgentTurn = vi

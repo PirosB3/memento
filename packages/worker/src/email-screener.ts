@@ -5,6 +5,7 @@ import { createLogger } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
 import type { AgentTool } from "../pi-types.js";
 import { loadCodexCredentials } from "./compaction.js";
+import { waitForIdle } from "./pi-turn.js";
 import {
   EMAIL_SCREENING_CATEGORIES,
   validateScreeningDecisions,
@@ -30,11 +31,11 @@ export async function runEmailScreener(
 
   const rawDecisions: EmailScreenerToolDecision[] = [];
   const tools = [
-    createDecisionTool("approve_email", "approve", rawDecisions),
-    createDecisionTool("reject_email", "reject", rawDecisions),
+    createDecisionTool("approve", rawDecisions),
+    createDecisionTool("reject", rawDecisions),
   ];
   const creds = await loadCodexCredentials();
-  const model = getModel("openai-codex" as never, "gpt-5.5" as never) as never;
+  const model = getModel("openai-codex", "gpt-5.5");
   const messages: AgentMessage[] = [{
     role: "user",
     content: [{ type: "text", text: buildUserPrompt(input) }],
@@ -69,14 +70,15 @@ export async function runEmailScreener(
 }
 
 function createDecisionTool(
-  name: "approve_email" | "reject_email",
   disposition: EmailScreeningDisposition,
   rawDecisions: EmailScreenerToolDecision[],
 ): AgentTool {
+  const verb = disposition === "approve" ? "Approve" : "Reject";
+  const name = `${disposition}_email`;
   return {
     name,
-    label: disposition === "approve" ? "Approve Email" : "Reject Email",
-    description: `${disposition === "approve" ? "Approve" : "Reject"} exactly one screened email. Call exactly one of approve_email or reject_email for each messageId in the batch.`,
+    label: `${verb} Email`,
+    description: `${verb} exactly one screened email. Call exactly one of approve_email or reject_email for each messageId in the batch.`,
     parameters: Type.Object({
       messageId: Type.String({ description: "The exact messageId being decided." }),
       riskLevel: Type.Union([
@@ -160,10 +162,4 @@ ${truncateForPrompt(email.body) || "(empty body)"}`;
 function truncateForPrompt(value: string): string {
   const maxLength = 12_000;
   return value.length > maxLength ? `${value.slice(0, maxLength)}\n...[truncated]` : value;
-}
-
-async function waitForIdle(agent: Agent): Promise<void> {
-  while (agent.state.isStreaming) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
 }

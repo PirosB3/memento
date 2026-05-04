@@ -19,8 +19,12 @@ import {
   type ScreenedEmailDecision,
   type ScreenInboundEmailBatchResult,
 } from "./email-screener-validation.js";
+import {
+  extractEmailAddress,
+  getAgentMailClient,
+  normalizeAddressList,
+} from "./tools/agentmail-tools.js";
 import { Client, Connection } from "@temporalio/client";
-import { AgentMailClient } from "agentmail";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -346,36 +350,28 @@ export async function screenInboundEmailBatch(
 
   const task = await prisma.task.findUniqueOrThrow({ where: { taskId } });
   const agent = await prisma.agent.findUniqueOrThrow({ where: { agentId: task.agentId } });
+  const agentmail = getAgentMailClient();
 
   let result: ScreenInboundEmailBatchResult;
-  let emailsForScreening: EmailForScreening[];
   try {
-    const screening = await withTimeout(
-      (async () => {
-        const agentmail = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY! });
-        const fetchedEmails = await Promise.all(
-          messageIds.map((messageId) => fetchEmailForScreening(agentmail, agent.agentEmail, messageId)),
-        );
-        return {
-          emailsForScreening: fetchedEmails,
-          result: await runEmailScreener({
-            taskObjective: task.objective,
-            ownerEmail: agent.ownerEmail,
-            agentEmail: agent.agentEmail,
-            emails: fetchedEmails,
-          }),
-        };
-      })(),
+    const fetchedEmails = await withTimeout(
+      Promise.all(messageIds.map((messageId) => fetchEmailForScreening(agentmail, agent.agentEmail, messageId))),
       EMAIL_SCREENING_TIMEOUT_MS,
       "Email screening timed out",
     );
-    emailsForScreening = screening.emailsForScreening;
-    result = screening.result;
+    result = await withTimeout(
+      runEmailScreener({
+        taskObjective: task.objective,
+        ownerEmail: agent.ownerEmail,
+        agentEmail: agent.agentEmail,
+        emails: fetchedEmails,
+      }),
+      EMAIL_SCREENING_TIMEOUT_MS,
+      "Email screening timed out",
+    );
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
     log.error(`Email screening failed closed for task=${taskId}`, error);
-    emailsForScreening = fallbackEmailsForScreening(emails);
-    result = buildFailClosedScreening(emailsForScreening, `Screening failed closed: ${reason}`);
+    result = buildFailClosedScreening(emails.flatMap(toFallbackEmails));
   }
 
   await sendOwnerAlertsForRejected(agent, result.decisions);
@@ -383,16 +379,13 @@ export async function screenInboundEmailBatch(
 }
 
 function uniqueMessageIds(emails: InboundEmail[]): string[] {
-  const out: string[] = [];
   const seen = new Set<string>();
   for (const email of emails) {
     for (const messageId of email.batchMessageIds ?? [email.messageId]) {
-      if (seen.has(messageId)) continue;
       seen.add(messageId);
-      out.push(messageId);
     }
   }
-  return out;
+  return [...seen];
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -409,44 +402,42 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   }
 }
 
-function coerceAddressList(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map(String);
-  if (typeof raw === "string") return [raw];
-  return [];
-}
-
-function normalizeSenderEmail(rawFrom: unknown): string {
-  if (typeof rawFrom !== "string") return "";
-  const trimmed = rawFrom.trim();
-  const match = trimmed.match(/<([^>]+)>/);
-  return (match?.[1] ?? trimmed).trim().toLowerCase();
+function pickStringField(msg: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = msg[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
 }
 
 async function fetchEmailForScreening(
-  agentmail: AgentMailClient,
+  agentmail: ReturnType<typeof getAgentMailClient>,
   inboxId: string,
   messageId: string,
 ): Promise<EmailForScreening> {
   const msg = await agentmail.inboxes.messages.get(inboxId, messageId) as unknown as Record<string, unknown>;
   const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+  const rawFrom = typeof msg.from === "string" ? msg.from : "";
   return {
     messageId,
-    sender: normalizeSenderEmail(msg.from) || String(msg.from ?? ""),
-    subject: typeof msg.subject === "string" ? msg.subject : null,
-    threadId: typeof (msg.threadId ?? msg.thread_id) === "string" ? (msg.threadId ?? msg.thread_id) as string : null,
-    to: coerceAddressList(msg.to),
-    cc: coerceAddressList(msg.cc),
-    timestamp: String(msg.createdAt ?? msg.created_at ?? msg.timestamp ?? new Date().toISOString()),
-    labels: coerceAddressList(msg.labels),
+    sender: extractEmailAddress(rawFrom) || rawFrom,
+    subject: pickStringField(msg, "subject"),
+    threadId: pickStringField(msg, "threadId", "thread_id"),
+    to: normalizeAddressList(msg.to as string | string[] | undefined),
+    cc: normalizeAddressList(msg.cc as string | string[] | undefined),
+    timestamp: pickStringField(msg, "createdAt", "created_at", "timestamp") ?? new Date().toISOString(),
+    labels: Array.isArray(msg.labels) ? msg.labels.map(String) : [],
     hasAttachments: attachments.length > 0,
     body: String(msg.extractedText ?? msg.text ?? ""),
   };
 }
 
-function fallbackEmailsForScreening(emails: InboundEmail[]): EmailForScreening[] {
-  return expandInboundEmails(emails).map((email) => ({
-    messageId: email.messageId,
-    sender: email.sender,
+function toFallbackEmails(email: InboundEmail): EmailForScreening[] {
+  const messageIds = email.batchMessageIds ?? [email.messageId];
+  const senders = email.batchSenders ?? [email.sender];
+  return messageIds.map((messageId, index) => ({
+    messageId,
+    sender: senders[index] ?? email.sender,
     subject: null,
     threadId: null,
     to: [email.inboxId],
@@ -458,24 +449,6 @@ function fallbackEmailsForScreening(emails: InboundEmail[]): EmailForScreening[]
   }));
 }
 
-function expandInboundEmails(emails: InboundEmail[]): Array<{
-  messageId: string;
-  sender: string;
-  inboxId: string;
-  timestamp: string;
-}> {
-  return emails.flatMap((email) => {
-    const messageIds = email.batchMessageIds ?? [email.messageId];
-    const senders = email.batchSenders ?? [email.sender];
-    return messageIds.map((messageId, index) => ({
-      messageId,
-      sender: senders[index] ?? email.sender,
-      inboxId: email.inboxId,
-      timestamp: email.timestamp,
-    }));
-  });
-}
-
 async function sendOwnerAlertsForRejected(
   agent: { agentEmail: string; ownerEmail: string; name: string },
   decisions: ScreenedEmailDecision[],
@@ -483,18 +456,17 @@ async function sendOwnerAlertsForRejected(
   const rejected = decisions.filter((decision) => decision.disposition === "reject");
   if (rejected.length === 0) return;
 
-  const agentmail = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY! });
-  for (const decision of rejected) {
-    try {
-      await agentmail.inboxes.messages.send(agent.agentEmail, {
-        to: [agent.ownerEmail],
-        subject: `Security alert: ${agent.name} rejected an email`,
-        text: formatOwnerAlert(decision),
-      });
-    } catch (error) {
+  const agentmail = getAgentMailClient();
+  const sends = rejected.map((decision) =>
+    agentmail.inboxes.messages.send(agent.agentEmail, {
+      to: [agent.ownerEmail],
+      subject: `Security alert: ${agent.name} rejected an email`,
+      text: formatOwnerAlert(decision),
+    }).catch((error: unknown) => {
       log.error(`Failed to alert owner for rejected email ${decision.messageId}`, error);
-    }
-  }
+    }),
+  );
+  await Promise.all(sends);
 }
 
 function formatOwnerAlert(decision: ScreenedEmailDecision): string {

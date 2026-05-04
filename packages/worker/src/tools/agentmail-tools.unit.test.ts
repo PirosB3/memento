@@ -482,9 +482,7 @@ describe("agentmail tools", () => {
 
   it("read_email blocks messages rejected for the current turn", async () => {
     const client = createAgentMailStub();
-    const tool = createReadEmailTool("avery@agentmail.test", "owner@example.com", {
-      blockedMessageIds: ["msg-rejected"],
-    });
+    const tool = createReadEmailTool("avery@agentmail.test", "owner@example.com", ["msg-rejected"]);
 
     const result = await tool.execute("call-read-rejected", { messageId: "msg-rejected" });
 
@@ -514,9 +512,7 @@ describe("agentmail tools", () => {
       ],
     });
 
-    const tool = createReadEmailsTool("avery@agentmail.test", {
-      blockedMessageIds: ["msg-rejected"],
-    });
+    const tool = createReadEmailsTool("avery@agentmail.test", ["msg-rejected"]);
     const result = await tool.execute("call-read-list", { limit: 10 });
     const text = getText(result);
 

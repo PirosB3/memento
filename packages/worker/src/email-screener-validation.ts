@@ -14,6 +14,8 @@ export const EMAIL_SCREENING_CATEGORIES = [
   "other",
 ] as const;
 
+const MAX_REASON_LENGTH = 600;
+
 const riskLevelSchema = z.enum(["none", "low", "medium", "high", "critical"]);
 const categorySchema = z.enum(EMAIL_SCREENING_CATEGORIES);
 
@@ -22,7 +24,7 @@ const toolDecisionSchema = z.object({
   riskLevel: riskLevelSchema,
   categories: z.array(categorySchema).min(1),
   requestedActions: z.array(z.string()).default([]),
-  reason: z.string().min(1).max(600),
+  reason: z.string().min(1).max(MAX_REASON_LENGTH),
 });
 
 export type EmailScreenerToolDecision = z.infer<typeof toolDecisionSchema> & {
@@ -65,11 +67,9 @@ export interface ScreenInboundEmailBatchResult {
   summary: string;
 }
 
-export function buildFailClosedScreening(
-  emails: EmailForScreening[],
-  reason: string,
-): ScreenInboundEmailBatchResult {
-  const sanitizedReason = sanitizeReason(reason);
+export const FAIL_CLOSED_REASON = "Email withheld: security screening could not produce a safe decision.";
+
+export function buildFailClosedScreening(emails: EmailForScreening[]): ScreenInboundEmailBatchResult {
   const decisions = emails.map((email): ScreenedEmailDecision => ({
     messageId: email.messageId,
     sender: email.sender,
@@ -79,7 +79,7 @@ export function buildFailClosedScreening(
     disposition: "reject",
     categories: ["other"],
     requestedActions: [],
-    reason: sanitizedReason,
+    reason: FAIL_CLOSED_REASON,
   }));
 
   return {
@@ -145,7 +145,7 @@ export function sanitizeReason(reason: string): string {
   return reason
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 600) || "Email rejected because screening did not produce a safe decision.";
+    .slice(0, MAX_REASON_LENGTH) || FAIL_CLOSED_REASON;
 }
 
 export function buildScreeningSummary(decisions: ScreenedEmailDecision[]): string {

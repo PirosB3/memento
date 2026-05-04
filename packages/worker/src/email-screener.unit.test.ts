@@ -134,7 +134,7 @@ describe("email screener decision validation", () => {
   });
 
   it("builds fail-closed rejections for the whole batch", () => {
-    const result = buildFailClosedScreening([email("msg-1"), email("msg-2")], "parser failed");
+    const result = buildFailClosedScreening([email("msg-1"), email("msg-2")]);
 
     expect(result.approvedMessageIds).toEqual([]);
     expect(result.rejectedMessageIds).toEqual(["msg-1", "msg-2"]);

@@ -82,10 +82,6 @@ type AttachmentAccess = {
   senderEmail: string | null;
 };
 
-type EmailReadOptions = {
-  blockedMessageIds?: readonly string[];
-};
-
 let agentmailClient: AgentMailLike | null = null;
 
 const attachmentInputSchema = Type.Object({
@@ -99,7 +95,7 @@ const attachmentInputSchema = Type.Object({
   contentId: Type.Optional(Type.String({ description: "Optional content ID for inline HTML references." })),
 });
 
-function getAgentMailClient(): AgentMailLike {
+export function getAgentMailClient(): AgentMailLike {
   if (!agentmailClient) {
     agentmailClient = new AgentMailClient({ apiKey: process.env.AGENTMAIL_API_KEY! });
   }
@@ -115,10 +111,6 @@ export function addTag(email: string, tag: string): string {
   return `${local}+${tag}@${domain}`;
 }
 
-function blockedMessageSet(options?: EmailReadOptions): Set<string> {
-  return new Set(options?.blockedMessageIds ?? []);
-}
-
 function getMessageId(message: Record<string, unknown>): string | null {
   const messageId = message.messageId ?? message.message_id;
   return typeof messageId === "string" && messageId ? messageId : null;
@@ -131,11 +123,11 @@ function filterBlockedMessages(
   if (blockedMessageIds.size === 0) return messages;
   return messages.filter((message) => {
     const messageId = getMessageId(message);
-    return !messageId || !blockedMessageIds.has(messageId);
+    return messageId !== null && !blockedMessageIds.has(messageId);
   });
 }
 
-function extractEmailAddress(addr: string): string {
+export function extractEmailAddress(addr: string): string {
   // AgentMail returns addresses as either "user@domain" or "Display Name <user@domain>".
   const trimmed = addr.trim();
   if (!trimmed) return "";
@@ -161,7 +153,7 @@ function normalizeString(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function normalizeAddressList(value: string | string[] | undefined): string[] {
+export function normalizeAddressList(value: string | string[] | undefined): string[] {
   const rawList = value === undefined
     ? []
     : Array.isArray(value)
@@ -626,9 +618,13 @@ export function createReplyEmailTool(
 // READ EMAIL (by ID — same for root and child)
 // ============================================================================
 
-export function createReadEmailTool(agentEmail: string, ownerEmail: string, options?: EmailReadOptions): AgentTool {
+export function createReadEmailTool(
+  agentEmail: string,
+  ownerEmail: string,
+  blockedMessageIds: readonly string[] = [],
+): AgentTool {
   const inboxId = agentEmail;
-  const blockedMessageIds = blockedMessageSet(options);
+  const blockedSet = new Set(blockedMessageIds);
 
   return {
     name: "read_email",
@@ -640,7 +636,7 @@ export function createReadEmailTool(agentEmail: string, ownerEmail: string, opti
     execute: async (_toolCallId, params) => {
       try {
         const p = params as { messageId: string };
-        if (blockedMessageIds.has(p.messageId)) {
+        if (blockedSet.has(p.messageId)) {
           return {
             content: [{ type: "text" as const, text: "Email blocked: this message was rejected by the security screener for the current turn." }],
             details: { error: true, blockedReason: "security_screening_rejected" },
@@ -688,10 +684,10 @@ export function createDownloadEmailAttachmentTool(
   agentEmail: string,
   ownerEmail: string,
   agentDir: string,
-  options?: EmailReadOptions,
+  blockedMessageIds: readonly string[] = [],
 ): AgentTool {
   const inboxId = agentEmail;
-  const blockedMessageIds = blockedMessageSet(options);
+  const blockedSet = new Set(blockedMessageIds);
 
   return {
     name: "download_email_attachment",
@@ -706,7 +702,7 @@ export function createDownloadEmailAttachmentTool(
     execute: async (_toolCallId, params) => {
       try {
         const p = params as DownloadAttachmentParams;
-        if (blockedMessageIds.has(p.messageId)) {
+        if (blockedSet.has(p.messageId)) {
           return {
             content: [{ type: "text" as const, text: "Attachment blocked: this message was rejected by the security screener for the current turn." }],
             details: { error: true, blockedReason: "security_screening_rejected" },
@@ -802,9 +798,12 @@ export function createDownloadEmailAttachmentTool(
 // READ EMAILS — root sees all, child filtered by +tag in thread recipients
 // ============================================================================
 
-export function createReadEmailsTool(agentEmail: string, options?: EmailReadOptions): AgentTool {
+export function createReadEmailsTool(
+  agentEmail: string,
+  blockedMessageIds: readonly string[] = [],
+): AgentTool {
   const inboxId = agentEmail;
-  const blockedMessageIds = blockedMessageSet(options);
+  const blockedSet = new Set(blockedMessageIds);
 
   return {
     name: "read_emails",
@@ -820,7 +819,7 @@ export function createReadEmailsTool(agentEmail: string, options?: EmailReadOpti
         const response = await agentmail.inboxes.messages.list(inboxId, { limit: p.limit ?? 10 }) as Record<string, unknown>;
         const messages = filterBlockedMessages(
           (response.messages ?? response.data ?? []) as Record<string, unknown>[],
-          blockedMessageIds,
+          blockedSet,
         );
         const formatted = messages
           .map((m) =>
@@ -844,10 +843,14 @@ export function createReadEmailsTool(agentEmail: string, options?: EmailReadOpti
  * Filtered version for child tasks — only shows emails from threads
  * where the +tag address appears in recipients or senders.
  */
-export function createFilteredReadEmailsTool(agentEmail: string, tag: string, options?: EmailReadOptions): AgentTool {
+export function createFilteredReadEmailsTool(
+  agentEmail: string,
+  tag: string,
+  blockedMessageIds: readonly string[] = [],
+): AgentTool {
   const inboxId = agentEmail;
   const taggedEmail = addTag(agentEmail, tag).toLowerCase();
-  const blockedMessageIds = blockedMessageSet(options);
+  const blockedSet = new Set(blockedMessageIds);
 
   return {
     name: "read_emails",
@@ -876,7 +879,7 @@ export function createFilteredReadEmailsTool(agentEmail: string, tag: string, op
         const msgResponse = await agentmail.inboxes.messages.list(inboxId, { limit: 50 }) as Record<string, unknown>;
         const allMessages = filterBlockedMessages(
           (msgResponse.messages ?? msgResponse.data ?? []) as Record<string, unknown>[],
-          blockedMessageIds,
+          blockedSet,
         );
         const filtered = allMessages
           .filter((m) => myThreadIds.has((m.threadId ?? m.thread_id) as string))

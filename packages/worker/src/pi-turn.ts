@@ -114,7 +114,6 @@ export async function runPiAgentTurnImpl(
         companyWebsite: process.env.COMPANY_WEBSITE?.trim() || null,
       }
     : null;
-  const emailReadOptions = blockedEmailIds.length > 0 ? { blockedMessageIds: blockedEmailIds } : undefined;
 
   // 7. Build tools based on root vs child
   const tools = isRoot
@@ -122,9 +121,9 @@ export async function runPiAgentTurnImpl(
         // Root: unfiltered email tools, base address
         createSendEmailTool(agent.agentEmail, agentDir, undefined, signature),
         createReplyEmailTool(agent.agentEmail, agentDir, undefined, signature),
-        createReadEmailTool(agent.agentEmail, agent.ownerEmail, emailReadOptions),
-        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir, emailReadOptions),
-        createReadEmailsTool(agent.agentEmail, emailReadOptions),
+        createReadEmailTool(agent.agentEmail, agent.ownerEmail, blockedEmailIds),
+        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir, blockedEmailIds),
+        createReadEmailsTool(agent.agentEmail, blockedEmailIds),
         createListThreadsTool(agent.agentEmail),
         // Root: task management tools
         createSpawnTaskTool(agent.agentId, agent.agentEmail),
@@ -147,9 +146,9 @@ export async function runPiAgentTurnImpl(
         // Child: filtered email tools, +tag address
         createSendEmailTool(agent.agentEmail, agentDir, task.tag, signature),
         createReplyEmailTool(agent.agentEmail, agentDir, task.tag, signature),
-        createReadEmailTool(agent.agentEmail, agent.ownerEmail, emailReadOptions),
-        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir, emailReadOptions),
-        createFilteredReadEmailsTool(agent.agentEmail, task.tag, emailReadOptions),
+        createReadEmailTool(agent.agentEmail, agent.ownerEmail, blockedEmailIds),
+        createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir, blockedEmailIds),
+        createFilteredReadEmailsTool(agent.agentEmail, task.tag, blockedEmailIds),
         createFilteredListThreadsTool(agent.agentEmail, task.tag),
         // Schedule tools
         createCreateScheduleTool(task.taskId, agent.agentId, false),
@@ -431,7 +430,7 @@ export async function runPiAgentTurnImpl(
   return finalDecision;
 }
 
-async function waitForIdle(agent: Agent): Promise<void> {
+export async function waitForIdle(agent: Agent): Promise<void> {
   while (agent.state.isStreaming) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
