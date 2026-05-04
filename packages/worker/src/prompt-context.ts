@@ -1,5 +1,5 @@
 import type { Agent, Task } from "@prisma/client";
-import type { WakeSource } from "@summon/shared";
+import type { WakeChannel, WakeSource } from "@summon/shared";
 
 export interface WakeMetadataItem {
   label: string;
@@ -8,6 +8,7 @@ export interface WakeMetadataItem {
 
 export interface BuildWakeMessageInput {
   wokenBy: WakeSource;
+  wakeChannel: WakeChannel;
   priorState: string;
   lastStopReason?: string | null;
   triggerContext: string;
@@ -23,6 +24,13 @@ export interface BuildWakeMessageInput {
     tools: string;
   };
 }
+
+const CHANNEL_GUIDANCE: Record<WakeChannel, string> = {
+  email: "Inbound email. Default to replying via email.",
+  ui: "Owner used the dashboard UI. Do NOT email a reply unless the instruction explicitly asks you to email someone — the owner is reading the conversation directly.",
+  schedule: "A scheduled timer fired. No reply is expected; act on the reminder.",
+  internal: "Internal system event (sleep timeout, restart, sibling/root signal, fresh creation). No external reply is expected.",
+};
 
 function taskEmailFor(agent: Agent, task: Task): string {
   if (task.isRoot) {
@@ -82,6 +90,7 @@ ${input.todoSnapshot}`
 
   return `## WAKE
 WOKEN BY: ${input.wokenBy}
+WAKE CHANNEL: ${input.wakeChannel} — ${CHANNEL_GUIDANCE[input.wakeChannel]}
 PRIOR STATE: ${input.priorState}
 LAST STOP REASON: ${input.lastStopReason ?? "none"}
 

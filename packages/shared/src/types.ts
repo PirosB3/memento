@@ -17,6 +17,10 @@ export type WakeSource =
   | "root_task"
   | "restart";
 
+// Channel through which the wake arrived. Used so the agent can default to
+// replying on the same channel that woke it (e.g. UI wake → no email reply).
+export type WakeChannel = "email" | "ui" | "schedule" | "internal";
+
 export type TaskWorkflowPhase =
   | "CREATED"
   | "RUNNING"

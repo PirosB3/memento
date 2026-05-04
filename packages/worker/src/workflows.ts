@@ -14,6 +14,7 @@ import type {
   TaskWorkflowPhase,
   TaskWorkflowResumeInput,
   TaskWorkflowRuntimeSnapshot,
+  WakeChannel,
   WakeSource,
 } from "@summon/shared/types";
 import {
@@ -42,6 +43,7 @@ interface Activities {
       includeContextSeed: boolean;
       wake: {
         wokenBy: WakeSource;
+        wakeChannel: WakeChannel;
         priorState: string;
         lastStopReason?: string | null;
         triggerContext: string;
@@ -107,6 +109,7 @@ type OwnerWakeEvent =
 interface WakeDetails {
   trigger: string;
   wokenBy: WakeSource;
+  wakeChannel: WakeChannel;
   triggerContext: string;
   metadata?: Array<{ label: string; value: string }>;
   actionNow: string;
@@ -226,6 +229,7 @@ async function insertPromptMessagesForTurn(
     includeContextSeed,
     wake: {
       wokenBy: wake.wokenBy,
+      wakeChannel: wake.wakeChannel,
       priorState,
       lastStopReason,
       triggerContext: wake.triggerContext,
@@ -336,6 +340,7 @@ async function processReflectionChain(
   const reflectionWake: WakeDetails = {
     trigger: "sleeping_phase",
     wokenBy: "sleep",
+    wakeChannel: "internal",
     triggerContext: `Nightly sleeping-phase reflection. ${gate.summary}`,
     metadata: [
       { label: "ROOT_TURN_COUNT", value: String(gate.rootTurnCount) },
@@ -530,6 +535,7 @@ export async function taskWorkflow(
     const restartWake: WakeDetails = {
       trigger: "restart",
       wokenBy: "restart",
+      wakeChannel: "internal",
       triggerContext: `Workflow execution restarted after being stopped while in ${previousPhase}. Resume from the persisted conversation and current database state.`,
       metadata: [
         { label: "PREVIOUS_PHASE", value: previousPhase },
@@ -607,6 +613,7 @@ export async function taskWorkflow(
   const firstWake: WakeDetails = {
     trigger: "created",
     wokenBy: "created",
+    wakeChannel: "internal",
     triggerContext: "Task just created. Starting fresh.",
     actionNow: isRoot
       ? "Set up the workspace, initialize memory files if missing, and prepare to help the owner."
@@ -752,6 +759,7 @@ async function activeLoop(
         wake = {
           trigger: "owner_response",
           wokenBy: "owner",
+          wakeChannel: "email",
           triggerContext: "Owner sent a message.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
           actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
@@ -763,6 +771,7 @@ async function activeLoop(
         wake = {
           trigger: "owner_response",
           wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
+          wakeChannel: ownerWake.source === "root_task" ? "internal" : "ui",
           triggerContext: inlineContext,
           metadata: [
             { label: "SOURCE", value: ownerWake.source },
@@ -778,6 +787,7 @@ async function activeLoop(
       wake = {
         trigger: "schedule",
         wokenBy: "schedule",
+        wakeChannel: "schedule",
         triggerContext: `${schedules.length} scheduled timer(s) fired.`,
         metadata: [
           { label: "SCHEDULE_IDS", value: schedules.map((sched) => sched.scheduleId).join(", ") },
@@ -792,6 +802,7 @@ async function activeLoop(
       wake = {
         trigger: "email",
         wokenBy: "email",
+        wakeChannel: "email",
         triggerContext: `Received ${allMessageIds.length} email(s) from: ${allSenders.join(", ")}`,
         metadata: [
           { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
@@ -803,6 +814,7 @@ async function activeLoop(
       wake = {
         trigger: "sleep_timeout",
         wokenBy: "sleep",
+        wakeChannel: "internal",
         triggerContext: `Sleep timer expired after ${sleepMs}ms. No new emails received.`,
         metadata: [{ label: "SLEEP_DURATION_MS", value: String(sleepMs) }],
         actionNow: isRoot
@@ -842,6 +854,7 @@ async function activeLoop(
         escalationWake = {
           trigger: "owner_response",
           wokenBy: "owner",
+          wakeChannel: "email",
           triggerContext: "Owner responded to escalation.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
           actionNow: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed.",
@@ -853,6 +866,7 @@ async function activeLoop(
         escalationWake = {
           trigger: "owner_response",
           wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
+          wakeChannel: ownerWake.source === "root_task" ? "internal" : "ui",
           triggerContext: inlineContext,
           metadata: [
             { label: "SOURCE", value: ownerWake.source },
@@ -920,6 +934,7 @@ async function dormantLoop(
         wake = {
           trigger: "owner_response",
           wokenBy: "owner",
+          wakeChannel: "email",
           triggerContext: "Owner sent a message to completed task. Reanimating.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
           actionNow: "Use read_email with the MESSAGE_ID above to inspect the owner's new request and decide whether to resume work.",
@@ -931,6 +946,7 @@ async function dormantLoop(
         wake = {
           trigger: "owner_response",
           wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
+          wakeChannel: ownerWake.source === "root_task" ? "internal" : "ui",
           triggerContext: inlineContext,
           metadata: [
             { label: "SOURCE", value: ownerWake.source },
@@ -946,6 +962,7 @@ async function dormantLoop(
       wake = {
         trigger: "schedule",
         wokenBy: "schedule",
+        wakeChannel: "schedule",
         triggerContext: `${schedules.length} scheduled timer(s) fired on completed task. Reanimating.`,
         metadata: [
           { label: "SCHEDULE_IDS", value: schedules.map((sched) => sched.scheduleId).join(", ") },
@@ -960,6 +977,7 @@ async function dormantLoop(
       wake = {
         trigger: "email",
         wokenBy: "email",
+        wakeChannel: "email",
         triggerContext: `Received ${allMessageIds.length} email(s) to completed task. Reanimating.`,
         metadata: [
           { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },

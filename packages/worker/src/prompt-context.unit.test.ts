@@ -57,6 +57,7 @@ describe("prompt context helpers", () => {
   it("builds a wake message with config deltas and reflection", () => {
     const message = buildWakeMessage({
       wokenBy: "owner",
+      wakeChannel: "email",
       priorState: "SLEEPING",
       lastStopReason: "Waiting for owner input",
       triggerContext: "Owner sent a message.",
@@ -74,6 +75,7 @@ describe("prompt context helpers", () => {
     });
 
     expect(message).toContain("WOKEN BY: owner");
+    expect(message).toContain("WAKE CHANNEL: email");
     expect(message).toContain("PRIOR STATE: SLEEPING");
     expect(message).toContain("MESSAGE_ID: msg-123");
     expect(message).toContain("## WHAT CHANGED");
@@ -91,6 +93,7 @@ describe("prompt context helpers", () => {
   it("omits the WHAT CHANGED section when the config has not changed", () => {
     const message = buildWakeMessage({
       wokenBy: "owner",
+      wakeChannel: "email",
       priorState: "SLEEPING",
       lastStopReason: "Waiting for owner input",
       triggerContext: "Owner sent a message.",
@@ -108,5 +111,31 @@ describe("prompt context helpers", () => {
     expect(message).toContain("## TRIGGER METADATA");
     expect(message).toContain("## WAKE REFLECTION");
     expect(message).toContain("## ACTION NOW");
+  });
+
+  it("renders distinct channel guidance for email vs ui wakes", () => {
+    const emailMessage = buildWakeMessage({
+      wokenBy: "owner",
+      wakeChannel: "email",
+      priorState: "SLEEPING",
+      triggerContext: "Owner emailed.",
+      reflection: "Resume.",
+      actionNow: "Read the email.",
+      configChanged: false,
+    });
+    const uiMessage = buildWakeMessage({
+      wokenBy: "owner",
+      wakeChannel: "ui",
+      priorState: "SLEEPING",
+      triggerContext: "Owner used the dashboard.",
+      reflection: "Resume.",
+      actionNow: "Act on the inline instruction.",
+      configChanged: false,
+    });
+
+    expect(emailMessage).toContain("WAKE CHANNEL: email");
+    expect(emailMessage).toContain("Default to replying via email");
+    expect(uiMessage).toContain("WAKE CHANNEL: ui");
+    expect(uiMessage).toContain("Do NOT email a reply");
   });
 });
