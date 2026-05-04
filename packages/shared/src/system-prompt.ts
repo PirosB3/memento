@@ -81,8 +81,12 @@ If you need Python in the workspace:
 ## OWNER STEERING
 When the owner sends instructions:
 1. Read the latest wake message and any referenced email.
-2. Update memory files if the instruction changes durable preferences.
-3. Reply or act.
+2. Match your response channel to the wake channel whenever possible:
+   - Wake metadata always includes \`ORIGIN_OF_WAKE\` (what woke you) and \`PREFERRED_RESPONSE_CHANNEL\`.
+   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: ui\`, do not send an owner email unless the owner explicitly asked for email.
+   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: email\`, reply by email unless there is a strong reason not to.
+3. Update memory files if the instruction changes durable preferences.
+4. Reply or act.
 
 ## YOUR TASK
 1. Read the context seed and latest wake message.
@@ -167,8 +171,12 @@ If you need Python in the workspace:
 ## OWNER STEERING
 When the owner sends instructions:
 1. Read the latest wake message and any referenced email.
-2. Update memory files if the instruction changes durable preferences.
-3. Reply or act.
+2. Match your response channel to the wake channel whenever possible:
+   - Wake metadata always includes \`ORIGIN_OF_WAKE\` (what woke you) and \`PREFERRED_RESPONSE_CHANNEL\`.
+   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: ui\`, do not send an owner email unless the owner explicitly asked for email.
+   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: email\`, reply by email unless there is a strong reason not to.
+3. Update memory files if the instruction changes durable preferences.
+4. Reply or act.
 
 ## TODO CONTRACT
 - Maintain \`tasks/<task-tag>/todo.md\` as the current execution checklist for this task.

@@ -112,6 +112,35 @@ interface WakeDetails {
   actionNow: string;
 }
 
+function getMetadataValue(
+  metadata: Array<{ label: string; value: string }> | undefined,
+  label: string,
+): string | undefined {
+  return metadata?.find((item) => item.label === label)?.value;
+}
+
+function enrichWakeMetadata(wake: WakeDetails): Array<{ label: string; value: string }> {
+  const existing = wake.metadata ?? [];
+  const source = getMetadataValue(existing, "SOURCE");
+  const originOfWake = source
+    ? `${wake.trigger}:${source}`
+    : `${wake.trigger}:${wake.wokenBy}`;
+
+  const withOrigin = existing.some((item) => item.label === "ORIGIN_OF_WAKE")
+    ? existing
+    : [{ label: "ORIGIN_OF_WAKE", value: originOfWake }, ...existing];
+
+  if (withOrigin.some((item) => item.label === "PREFERRED_RESPONSE_CHANNEL")) {
+    return withOrigin;
+  }
+
+  const inferredChannel = wake.trigger === "owner_response"
+    ? (wake.wokenBy === "owner" ? "email" : "ui")
+    : "same_as_trigger";
+
+  return [...withOrigin, { label: "PREFERRED_RESPONSE_CHANNEL", value: inferredChannel }];
+}
+
 export const onEmailSignal = defineSignal<[InboundEmail]>("on_email");
 export const onOwnerResponseSignal = defineSignal<[string]>("on_owner_response");
 export const onScheduleSignal = defineSignal<[string, string]>("on_schedule");
@@ -229,7 +258,7 @@ async function insertPromptMessagesForTurn(
       priorState,
       lastStopReason,
       triggerContext: wake.triggerContext,
-      metadata: wake.metadata,
+      metadata: enrichWakeMetadata(wake),
       reflection,
       actionNow: wake.actionNow,
     },
@@ -753,10 +782,14 @@ async function activeLoop(
           trigger: "owner_response",
           wokenBy: "owner",
           triggerContext: "Owner sent a message.",
-          metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
+          metadata: [
+            { label: "MESSAGE_ID", value: ownerWake.messageId },
+            { label: "PREFERRED_RESPONSE_CHANNEL", value: "email" },
+          ],
+          actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it. Prefer responding over email to match the wake channel.",
         };
       } else {
+        const preferredResponseChannel = "ui";
         const inlineContext = ownerWake.message
           ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} with message: ${ownerWake.message}`
           : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)}.`;
@@ -766,11 +799,12 @@ async function activeLoop(
           triggerContext: inlineContext,
           metadata: [
             { label: "SOURCE", value: ownerWake.source },
+            { label: "PREFERRED_RESPONSE_CHANNEL", value: preferredResponseChannel },
             ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
           ],
           actionNow: ownerWake.message
-            ? `Act on the inline instruction: ${ownerWake.message}`
-            : `Act on the inline instruction from ${describeInlineWakeSource(ownerWake.source)}.`,
+            ? `Act on the inline instruction: ${ownerWake.message}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`
+            : `Act on the inline instruction from ${describeInlineWakeSource(ownerWake.source)}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`,
         };
       }
     } else if (scheduleQueue.length > 0) {
@@ -843,10 +877,14 @@ async function activeLoop(
           trigger: "owner_response",
           wokenBy: "owner",
           triggerContext: "Owner responded to escalation.",
-          metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed.",
+          metadata: [
+            { label: "MESSAGE_ID", value: ownerWake.messageId },
+            { label: "PREFERRED_RESPONSE_CHANNEL", value: "email" },
+          ],
+          actionNow: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed. Prefer responding over email to match the wake channel.",
         };
       } else {
+        const preferredResponseChannel = "ui";
         const inlineContext = ownerWake.message
           ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated: ${ownerWake.message}`
           : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated.`;
@@ -856,11 +894,12 @@ async function activeLoop(
           triggerContext: inlineContext,
           metadata: [
             { label: "SOURCE", value: ownerWake.source },
+            { label: "PREFERRED_RESPONSE_CHANNEL", value: preferredResponseChannel },
             ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
           ],
           actionNow: ownerWake.message
-            ? `Resolve the escalation using the inline instruction: ${ownerWake.message}`
-            : `Resolve the escalation using the inline instruction from ${describeInlineWakeSource(ownerWake.source)}.`,
+            ? `Resolve the escalation using the inline instruction: ${ownerWake.message}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`
+            : `Resolve the escalation using the inline instruction from ${describeInlineWakeSource(ownerWake.source)}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`,
         };
       }
 
@@ -921,10 +960,14 @@ async function dormantLoop(
           trigger: "owner_response",
           wokenBy: "owner",
           triggerContext: "Owner sent a message to completed task. Reanimating.",
-          metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: "Use read_email with the MESSAGE_ID above to inspect the owner's new request and decide whether to resume work.",
+          metadata: [
+            { label: "MESSAGE_ID", value: ownerWake.messageId },
+            { label: "PREFERRED_RESPONSE_CHANNEL", value: "email" },
+          ],
+          actionNow: "Use read_email with the MESSAGE_ID above to inspect the owner's new request and decide whether to resume work. Prefer responding over email to match the wake channel.",
         };
       } else {
+        const preferredResponseChannel = "ui";
         const inlineContext = ownerWake.message
           ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} for a completed task: ${ownerWake.message}`
           : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} for a completed task. Reanimating.`;
@@ -934,11 +977,12 @@ async function dormantLoop(
           triggerContext: inlineContext,
           metadata: [
             { label: "SOURCE", value: ownerWake.source },
+            { label: "PREFERRED_RESPONSE_CHANNEL", value: preferredResponseChannel },
             ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
           ],
           actionNow: ownerWake.message
-            ? `Use the inline instruction to decide whether to resume the completed task: ${ownerWake.message}`
-            : `Use the inline instruction from ${describeInlineWakeSource(ownerWake.source)} to decide whether to resume work.`,
+            ? `Use the inline instruction to decide whether to resume the completed task: ${ownerWake.message}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`
+            : `Use the inline instruction from ${describeInlineWakeSource(ownerWake.source)} to decide whether to resume work. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`,
         };
       }
     } else if (scheduleQueue.length > 0) {
