@@ -1,5 +1,8 @@
 import crypto from "crypto";
-import { SIGNAL_OWNER } from "@summon/shared";
+import { SIGNAL_OWNER, publishTurnSnapshot, createLogger } from "@summon/shared";
+import { uuidv7 } from "uuidv7";
+
+const log = createLogger("web:task-services");
 import { getWebServiceDependencies } from "./dependencies";
 import type { WebServiceDependencies } from "./dependencies";
 import { parseJsonArray } from "./json";
@@ -193,7 +196,11 @@ async function insertImmediateWakeMessage(
         content,
         timestamp: Date.now(),
       }),
+      orderingKey: uuidv7(),
     },
+  });
+  await publishTurnSnapshot(taskId, []).catch((err) => {
+    log.warn(`publishTurnSnapshot after insertImmediateWakeMessage failed: ${String(err)}`);
   });
 }
 

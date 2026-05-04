@@ -5,10 +5,12 @@ import {
   SIGNAL_SCHEDULE,
   getTemporalAddress,
   getAgentsDir,
+  publishTurnSnapshot,
 } from "@summon/shared";
+import { uuidv7 } from "uuidv7";
 import type { DecisionResult, AgentStatus, TaskStatus, TaskInfo } from "@summon/shared";
 import { runPiAgentTurnImpl } from "./pi-turn.js";
-import { runReflectionImpl } from "./reflection.js";
+import { runReflectionImpl, runChildReflectionStepImpl } from "./reflection.js";
 import { Client, Connection } from "@temporalio/client";
 import crypto from "crypto";
 import fs from "fs";
@@ -16,6 +18,7 @@ import path from "path";
 import { buildContextSeedMessage, buildWakeMessage } from "./prompt-context.js";
 import type { WakeChannel, WakeSource } from "@summon/shared";
 import {
+  buildCappedTodoSnapshot,
   buildInvalidTodoNotice,
   buildMissingTodoNotice,
   readTodoSnapshot,
@@ -49,6 +52,8 @@ export interface Activities {
   preparePromptMessages: typeof preparePromptMessages;
   runReflection: typeof runReflection;
   runPiAgentTurn: typeof runPiAgentTurn;
+  runActivityGate: typeof runActivityGate;
+  runChildReflectionStep: typeof runChildReflectionStep;
 }
 
 export interface PreparePromptMessagesInput {
@@ -79,7 +84,7 @@ function buildTodoSnapshotForPrompt(agentDir: string, task: { isRoot: boolean; t
     return `${todoState.snapshot}\n\nNOTE: ${buildInvalidTodoNotice(todoRelativePath)}`;
   }
 
-  return todoState.snapshot;
+  return buildCappedTodoSnapshot(todoState);
 }
 
 function readTextFileOrNull(filePath: string): string | null {
@@ -247,7 +252,11 @@ export async function insertConversationMessage(
       taskId,
       role: msg.role,
       message: JSON.stringify({ role: msg.role, content: msg.content, timestamp: Date.now() }),
+      orderingKey: uuidv7(),
     },
+  });
+  await publishTurnSnapshot(taskId, []).catch((err) => {
+    log.warn(`publishTurnSnapshot after insertConversationMessage failed: ${String(err)}`);
   });
 }
 
@@ -355,7 +364,11 @@ Source: root task wake
 ${message}`,
         timestamp: Date.now(),
       }),
+      orderingKey: uuidv7(),
     },
+  });
+  await publishTurnSnapshot(taskId, []).catch((err) => {
+    log.warn(`publishTurnSnapshot after wakeTask failed: ${String(err)}`);
   });
 
   // Signal the child workflow to wake
@@ -489,6 +502,84 @@ export async function runPiAgentTurn(
     return result;
   } catch (err) {
     log.error(`Pi agent turn failed: task=${taskId}`, err);
+    throw err;
+  }
+}
+
+// --- Sleeping-phase reflection activities ---
+
+export interface ActivityGateResult {
+  hasActivity: boolean;
+  activeChildTaskIds: string[];
+  rootTurnCount: number;
+  summary: string;
+}
+
+const REFLECTION_TRIGGERS = [
+  "sleeping_phase",
+  "sleeping_phase_no_delta",
+  "sleeping_phase_child_error",
+];
+
+export async function runActivityGate(
+  agentId: string,
+  windowHours: number = 24,
+): Promise<ActivityGateResult> {
+  const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
+
+  const rootTask = await prisma.task.findFirst({
+    where: { agentId, isRoot: true },
+  });
+  if (!rootTask) {
+    throw new Error(`No root task found for agent ${agentId}`);
+  }
+
+  const rootTurnCount = await prisma.agentTurnLog.count({
+    where: {
+      taskId: rootTask.taskId,
+      timestamp: { gte: since },
+      trigger: { notIn: REFLECTION_TRIGGERS },
+    },
+  });
+
+  const activeChildren = await prisma.task.findMany({
+    where: {
+      agentId,
+      isRoot: false,
+      lastActivityAt: { gte: since },
+    },
+    orderBy: { lastActivityAt: "asc" },
+    select: { taskId: true, tag: true },
+  });
+
+  const hasActivity = rootTurnCount > 0 || activeChildren.length > 0;
+  const summary = hasActivity
+    ? `Root took ${rootTurnCount} non-reflection turn(s); ${activeChildren.length} child task(s) active in last ${windowHours}h.`
+    : `No root turns or child-task activity in last ${windowHours}h.`;
+
+  log.info(`Activity gate: agent=${agentId} hasActivity=${hasActivity}`, {
+    rootTurnCount,
+    activeChildCount: activeChildren.length,
+  });
+
+  return {
+    hasActivity,
+    activeChildTaskIds: activeChildren.map((c) => c.taskId),
+    rootTurnCount,
+    summary,
+  };
+}
+
+export async function runChildReflectionStep(
+  childTaskId: string,
+): Promise<string> {
+  log.info(`Running child reflection step: task=${childTaskId}`);
+  try {
+    const digest = await runChildReflectionStepImpl(childTaskId);
+    log.info(`Child reflection step completed: task=${childTaskId} digestLen=${digest.length}`);
+    return digest;
+  } catch (err) {
+    log.error(`Child reflection step failed: task=${childTaskId}`, err);
     throw err;
   }
 }

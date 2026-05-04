@@ -1,3 +1,5 @@
+## NOTE: This is a personal project, not production-grade
+
 # Memento
 
 ![Memento](./docs/images/memento-hero.jpg)
@@ -56,8 +58,8 @@ Run these commands locally (or after automated agent edits):
 ```bash
 pnpm lint          # oxlint (repo-wide)
 pnpm typecheck        # TypeScript checks for shared + email-gateway
-pnpm typecheck:web    # web-only typecheck (requires built repos/pi-mono artifacts)
-pnpm typecheck:worker # worker-only typecheck (requires built repos/pi-mono artifacts)
+pnpm typecheck:web    # web-only typecheck
+pnpm typecheck:worker # worker-only typecheck
 pnpm quality       # lint + typecheck
 pnpm quality:agent # fast post-agent gate (oxlint + typecheck)
 pnpm lint:web      # optional: run Next.js/React eslint rules for web package

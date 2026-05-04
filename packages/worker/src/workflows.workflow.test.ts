@@ -42,8 +42,14 @@ describe("workflows", () => {
   });
 
   it("wakes a root task when the owner responds", async () => {
-    const env = await TestWorkflowEnvironment.createTimeSkipping();
+    const env = await TestWorkflowEnvironment.createLocal();
     const insertConversationMessage = vi.fn().mockResolvedValue(undefined);
+    const runActivityGate = vi.fn().mockResolvedValue({
+      hasActivity: false,
+      activeChildTaskIds: [],
+      rootTurnCount: 0,
+      summary: "No root turns or child-task activity in last 24h.",
+    });
     const preparePromptMessages = vi.fn().mockImplementation(
       async (
         _taskId: string,
@@ -93,6 +99,8 @@ describe("workflows", () => {
         preparePromptMessages,
         runReflection: vi.fn().mockResolvedValue("Reflecting on the turn."),
         runPiAgentTurn,
+        runActivityGate,
+        runChildReflectionStep: vi.fn(),
         fireScheduleSignal: vi.fn().mockResolvedValue(undefined),
         updateScheduleStatus: vi.fn().mockResolvedValue(undefined),
       },

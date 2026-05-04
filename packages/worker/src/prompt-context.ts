@@ -74,9 +74,6 @@ export function buildWakeMessage(input: BuildWakeMessageInput): string {
   const metadataLines = (input.metadata ?? [])
     .map((item) => `- ${item.label}: ${item.value}`)
     .join("\n");
-  const changedFields = input.configChangedFields?.length
-    ? input.configChangedFields.join(", ")
-    : "none";
   const configSection = input.configChanged && input.configSnapshot
     ? `\n### UPDATED CONFIG SNAPSHOT
 #### SOUL
@@ -87,6 +84,10 @@ ${input.configSnapshot.boundaries}
 
 #### TOOLS
 ${input.configSnapshot.tools}`
+    : "";
+  const whatChangedSection = input.configChanged
+    ? `\n\n## WHAT CHANGED
+- Changed fields: ${input.configChangedFields?.length ? input.configChangedFields.join(", ") : "unknown"}${configSection}`
     : "";
   const todoSection = input.todoSnapshot
     ? `\n\n## TODO SNAPSHOT
@@ -106,11 +107,7 @@ ${describeChannelReplyRule(input.channel)}
 ${input.triggerContext}
 
 ## TRIGGER METADATA
-${metadataLines || "- none"}
-
-## WHAT CHANGED
-- Config changed: ${input.configChanged ? "yes" : "no"}
-- Changed fields: ${changedFields}${configSection}
+${metadataLines || "- none"}${whatChangedSection}
 
 ## WAKE REFLECTION
 ${input.reflection}${todoSection}

@@ -66,7 +66,7 @@ export async function buildAvatarPrompt(name: string, soul: string): Promise<str
   const openai = getOpenAI();
   const soulSnippet = soul.trim().slice(0, 1000);
   const brief = await openai.chat.completions.create({
-    model: "gpt-5.4",
+    model: "gpt-5.5",
     messages: [
       { role: "system", content: PORTRAIT_BRIEF_SYSTEM },
       { role: "user", content: `Agent name: ${name}\n\nSOUL:\n${soulSnippet}` },

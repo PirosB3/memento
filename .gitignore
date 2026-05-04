@@ -1,11 +1,13 @@
 node_modules
 dist/
 .next/
+.claude/scheduled_tasks.lock
 .env
 .env.local
 .env.production
 !.env.example
 !.env.test
+data/
 data/*.db
 data/*.db-journal
 data/*-credentials.json

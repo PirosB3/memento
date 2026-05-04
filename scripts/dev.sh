@@ -52,6 +52,28 @@ until docker compose exec -T temporal temporal operator cluster health --address
 done
 echo "Temporal is ready."
 
+# --- Optionally expose the dev server over Tailscale ---
+# Best-effort: if the Tailscale CLI is present and the node is logged in,
+# proxy https://<magic-dns>:8443 -> http://127.0.0.1:3000 (tailnet only,
+# never public). Skips silently when tailscale isn't available.
+TAILSCALE_HOSTNAME=""
+if command -v tailscale >/dev/null 2>&1; then
+  TAILSCALE_HOSTNAME="$(
+    tailscale status --json 2>/dev/null \
+      | python3 -c 'import sys, json; print(json.load(sys.stdin).get("Self", {}).get("DNSName", "").rstrip("."))' 2>/dev/null \
+      || true
+  )"
+  if [ -n "$TAILSCALE_HOSTNAME" ]; then
+    if tailscale serve --bg --https=8443 3000 >/dev/null 2>&1; then
+      export DEV_ALLOWED_ORIGINS="$TAILSCALE_HOSTNAME"
+      echo "Tailscale proxy: https://$TAILSCALE_HOSTNAME:8443 -> :3000"
+    else
+      echo "Note: 'tailscale serve' failed; continuing without tailnet proxy."
+      TAILSCALE_HOSTNAME=""
+    fi
+  fi
+fi
+
 # --- Run pending database migrations ---
 echo "Applying database migrations..."
 pnpm db:migrate:deploy 2>&1 | prefix "$RED" "migrate"
@@ -70,6 +92,7 @@ echo ""
 echo "All services started. Press Ctrl-C to stop app processes."
 echo "  Temporal UI: http://localhost:8233"
 echo "  Web:         http://localhost:3000"
+[ -n "$TAILSCALE_HOSTNAME" ] && echo "  Web (tailnet): https://$TAILSCALE_HOSTNAME:8443"
 echo ""
 
 wait

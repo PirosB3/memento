@@ -1,12 +1,9 @@
-import { Agent } from "../../../repos/pi-mono/packages/agent/dist/index.js";
-import { getModel } from "../../../repos/pi-mono/packages/ai/dist/index.js";
-import {
-  convertResponsesMessages,
-  convertResponsesTools,
-} from "../../../repos/pi-mono/packages/ai/dist/providers/openai-responses-shared.js";
-import { prisma, buildSystemPrompt, createLogger, getAgentsDir } from "@summon/shared";
-import type { AgentSignature, DecisionResult } from "@summon/shared";
+import { Agent } from "@mariozechner/pi-agent-core";
+import { getModel } from "@mariozechner/pi-ai";
+import { prisma, buildSystemPrompt, createLogger, getAgentsDir, publishTurnSnapshot } from "@summon/shared";
+import type { AgentSignature, DecisionResult, PendingMessage } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
+import { uuidv7 } from "uuidv7";
 import {
   compactTaskContext,
   estimateMessagesTokens,
@@ -38,6 +35,11 @@ import {
   createListSchedulesTool,
   createCancelScheduleTool,
 } from "./tools/schedule-tools.js";
+import {
+  ensureSharedSkillsLink,
+  loadSkillManifest,
+  renderSkillManifest,
+} from "./skill-manifest.js";
 import fs from "fs";
 import path from "path";
 
@@ -78,13 +80,9 @@ export async function runPiAgentTurnImpl(
   // Symlink shared/ into the agent workspace so every agent has access to shared skills.
   // Target is relative to the directory containing the symlink: ../../shared resolves from
   // packages/worker/agents/{id}/ up to packages/worker/shared/.
-  const sharedLinkPath = path.join(agentDir, "shared");
-  if (!fs.existsSync(sharedLinkPath)) {
-    try {
-      fs.symlinkSync("../../shared", sharedLinkPath, "dir");
-    } catch (err) {
-      taskLog.warn(`Failed to create shared/ symlink: ${String(err)}`);
-    }
+  const sharedLink = ensureSharedSkillsLink(agentDir);
+  if (sharedLink.warning) {
+    taskLog.warn(sharedLink.warning);
   }
 
   // Ensure task-level directory exists (child tasks only)
@@ -93,8 +91,12 @@ export async function runPiAgentTurnImpl(
     fs.mkdirSync(taskDir, { recursive: true });
   }
 
-  // 5. Build the static role prompt
-  const systemPrompt = buildSystemPrompt(isRoot);
+  // 5. Build the role prompt with the current skill manifest.
+  const skillManifest = loadSkillManifest(agentDir);
+  for (const warning of skillManifest.warnings) {
+    taskLog.warn(warning);
+  }
+  const systemPrompt = buildSystemPrompt(isRoot, renderSkillManifest(skillManifest.entries));
 
   // 6. Set up decision capture
   let capturedDecision: DecisionResult | null = null;
@@ -162,8 +164,8 @@ export async function runPiAgentTurnImpl(
 
   taskLog.info(`System prompt built: ${systemPrompt.length} chars, ${messages.length} messages, ${tools.length} tools`);
 
-  // 8. Get model (GPT-5.4 via ChatGPT OAuth subscription)
-  const model = getModel("openai-codex", "gpt-5.4");
+  // 8. Get model (GPT-5.5 via ChatGPT OAuth subscription)
+  const model = getModel("openai-codex", "gpt-5.5");
 
   // 8a. Load OAuth credentials (auto-refreshes if expired)
   const codexCreds = await loadCodexCredentials();
@@ -216,19 +218,12 @@ export async function runPiAgentTurnImpl(
       const result = await compactTaskContext({
         taskId,
         activeMessages: olderMessages,
-        systemPrompt,
-        tools,
-        mainModelId: "gpt-5.4",
         credentials: codexCreds,
-        existingCompactedPrefix: task.compactedPrefix,
         existingCompactedSummary: task.compactedSummary,
         lastConversationId: cutoffConvId,
         tokensBefore: olderTokens,
-        convertResponsesMessages: convertResponsesMessages as never,
-        responsesToolConverter: convertResponsesTools as never,
-        codexModelForConvert: model as never,
       });
-      if (result.mode === "prefix" || result.mode === "summary") {
+      if (result.mode === "summary") {
         // Keep only the recent messages in the active array; older ones are
         // now represented by the compacted prefix/summary and will be
         // injected via onPayload.
@@ -277,13 +272,91 @@ export async function runPiAgentTurnImpl(
     },
   });
 
-  // 10. Subscribe to events for logging
-  piAgent.subscribe((event) => {
-    if (event.type === "tool_execution_start") {
-      taskLog.info(`Tool call started: ${event.toolName}`);
+  // 10. Subscribe to events: log tool execution + maintain a pending-messages
+  //     buffer that gets published to SSE subscribers via pg_notify while the
+  //     turn is in flight. Pi emits cloned assistant messages while streaming,
+  //     so keep stable slots independent from event object identity.
+  type PendingSlot = { orderingKey: string; message: AgentMessage };
+  const pendingOrder: PendingSlot[] = [];
+  const committedOrderingKeys = new WeakMap<AgentMessage, string>();
+  let activeAssistantSlot: PendingSlot | null = null;
+  let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastPublishMs = 0;
+  const PUBLISH_THROTTLE_MS = 50;
+
+  function buildSnapshot(): PendingMessage[] {
+    return pendingOrder.map((slot) => ({
+      orderingKey: slot.orderingKey,
+      role: slot.message.role,
+      message: slot.message,
+    }));
+  }
+
+  function flushPublish(): void {
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
     }
-    if (event.type === "tool_execution_end") {
-      taskLog.info(`Tool call ended: ${event.toolName} (error: ${event.isError})`);
+    lastPublishMs = Date.now();
+    const snapshot = buildSnapshot();
+    // Fire-and-forget: NOTIFY round-trips must not block Pi's event loop, which
+    // fires deltas at 30–60 Hz during token streaming.
+    publishTurnSnapshot(taskId, snapshot).catch((err) => {
+      taskLog.warn(`publishTurnSnapshot failed: ${String(err)}`);
+    });
+  }
+
+  function schedulePublish(immediate: boolean): void {
+    if (immediate) {
+      flushPublish();
+      return;
+    }
+    if (throttleTimer) return;
+    const elapsed = Date.now() - lastPublishMs;
+    const wait = Math.max(0, PUBLISH_THROTTLE_MS - elapsed);
+    throttleTimer = setTimeout(() => {
+      throttleTimer = null;
+      flushPublish();
+    }, wait);
+  }
+
+  piAgent.subscribe((event) => {
+    switch (event.type) {
+      case "message_start": {
+        const slot = { orderingKey: uuidv7(), message: event.message };
+        pendingOrder.push(slot);
+        if (event.message.role === "assistant") {
+          activeAssistantSlot = slot;
+        }
+        schedulePublish(true);
+        break;
+      }
+      case "message_update":
+        if (activeAssistantSlot) {
+          activeAssistantSlot.message = event.message;
+        }
+        schedulePublish(false);
+        break;
+      case "message_end":
+        if (activeAssistantSlot && event.message.role === "assistant") {
+          activeAssistantSlot.message = event.message;
+          committedOrderingKeys.set(event.message, activeAssistantSlot.orderingKey);
+          activeAssistantSlot = null;
+        } else {
+          const slot = pendingOrder[pendingOrder.length - 1];
+          if (slot) {
+            slot.message = event.message;
+            committedOrderingKeys.set(event.message, slot.orderingKey);
+          }
+        }
+        schedulePublish(true);
+        break;
+      case "tool_execution_start":
+        taskLog.info(`Tool call started: ${event.toolName}`);
+        break;
+      case "tool_execution_end":
+        taskLog.info(`Tool call ended: ${event.toolName} (error: ${event.isError})`);
+        break;
     }
   });
 
@@ -295,6 +368,15 @@ export async function runPiAgentTurnImpl(
     taskLog.info("Pi agent turn execution completed");
   } catch (error) {
     taskLog.error("Pi agent turn execution failed", error);
+    if (throttleTimer) {
+      clearTimeout(throttleTimer);
+      throttleTimer = null;
+    }
+    try {
+      await publishTurnSnapshot(taskId, []);
+    } catch (notifyErr) {
+      taskLog.warn(`Failed to clear overlay after turn error: ${String(notifyErr)}`);
+    }
     return {
       type: "fail",
       stopReason: `Agent turn failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -302,13 +384,33 @@ export async function runPiAgentTurnImpl(
     };
   }
 
-  // 12. Persist new messages to DB
+  // 12. Persist new messages to DB — single createMany so the ordering_key
+  //     watermark jumps past the entire turn atomically from a reader's view.
+  if (throttleTimer) {
+    clearTimeout(throttleTimer);
+    throttleTimer = null;
+  }
   const newMessages = piAgent.state.messages.slice(initialMessageCount);
   taskLog.info(`Persisting ${newMessages.length} new messages to DB`);
-  for (const msg of newMessages) {
-    await prisma.conversation.create({
-      data: { taskId, role: msg.role, message: JSON.stringify(msg) },
+  if (newMessages.length > 0) {
+    await prisma.conversation.createMany({
+      data: newMessages.map((msg) => ({
+        taskId,
+        role: msg.role,
+        message: JSON.stringify(msg),
+        // Use the buffered ordering key when available. Defensive fallback: if
+        // a message somehow appeared in state.messages without a corresponding
+        // message_start event (shouldn't happen), mint one now.
+        orderingKey: committedOrderingKeys.get(msg) ?? uuidv7(),
+      })),
     });
+  }
+  pendingOrder.length = 0;
+  activeAssistantSlot = null;
+  try {
+    await publishTurnSnapshot(taskId, []);
+  } catch (err) {
+    taskLog.warn(`Final empty publishTurnSnapshot failed: ${String(err)}`);
   }
 
   // 13. Update lastActivityAt

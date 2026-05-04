@@ -42,6 +42,7 @@ export interface TaskWorkflowRuntimeSnapshot {
   turnNumber: number;
   lastStopReason: string | null;
   nextWakeAt: string | null;
+  lastReflectionAt?: string | null;
   pendingEmailCount: number;
   pendingOwnerCount: number;
   pendingScheduleCount: number;

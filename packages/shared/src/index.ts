@@ -1,4 +1,6 @@
 export { prisma } from "./db";
+export { channelForTask, publishTurnSnapshot } from "./pubsub";
+export type { PendingMessage, TurnSnapshotState } from "./pubsub";
 export { buildSystemPrompt } from "./system-prompt";
 export { createLogger } from "./logger";
 export type { Logger } from "./logger";

@@ -23,6 +23,11 @@ import {
   SCHEDULE_RUNTIME_MEMO_KEY as SCHEDULE_RUNTIME_MEMO_KEY_NAME,
   TASK_RUNTIME_MEMO_KEY as TASK_RUNTIME_MEMO_KEY_NAME,
 } from "@summon/shared/types";
+import {
+  normalizeReflectionTimestamp,
+  reflectionIsDue,
+  timeUntilNextReflection,
+} from "./reflection-schedule";
 
 interface Activities {
   loadTaskFromDb(taskId: string): Promise<{ taskId: string; agentId: string; status: string; isRoot: boolean }>;
@@ -57,6 +62,16 @@ interface Activities {
     lastStopReason: string | null,
   ): Promise<string>;
   runPiAgentTurn(taskId: string, turnLogId: number): Promise<DecisionResult>;
+  runActivityGate(
+    agentId: string,
+    windowHours?: number,
+  ): Promise<{
+    hasActivity: boolean;
+    activeChildTaskIds: string[];
+    rootTurnCount: number;
+    summary: string;
+  }>;
+  runChildReflectionStep(childTaskId: string): Promise<string>;
 }
 
 const {
@@ -70,6 +85,8 @@ const {
   preparePromptMessages,
   runReflection,
   runPiAgentTurn,
+  runActivityGate,
+  runChildReflectionStep,
 } = proxyActivities<Activities>({
   startToCloseTimeout: "10m",
   retry: {
@@ -166,6 +183,7 @@ function buildTaskMemoSnapshot(input: {
   turnNumber: number;
   lastStopReason: string | null;
   nextWakeAt: string | null;
+  lastReflectionAt: string | null;
   pendingEmailCount: number;
   pendingOwnerCount: number;
   pendingScheduleCount: number;
@@ -180,6 +198,7 @@ function buildTaskMemoSnapshot(input: {
     turnNumber: input.turnNumber,
     lastStopReason: input.lastStopReason,
     nextWakeAt: input.nextWakeAt,
+    lastReflectionAt: input.lastReflectionAt,
     pendingEmailCount: input.pendingEmailCount,
     pendingOwnerCount: input.pendingOwnerCount,
     pendingScheduleCount: input.pendingScheduleCount,
@@ -231,6 +250,112 @@ async function insertPromptMessagesForTurn(
     role: "user",
     content: promptMessages.wakeMessage,
   });
+}
+
+function buildReflectionActionNow(accumulatedDigest: string): string {
+  const digestBlock = accumulatedDigest.trim()
+    ? accumulatedDigest.trim()
+    : "(no active children — you are reflecting on root-only activity.)";
+
+  return `You are in sleeping-phase reflection mode. You are not doing task work. You are learning from the last 24h.
+
+## PER-CHILD REFLECTION DIGESTS (oldest activity first)
+${digestBlock}
+
+## YOUR REFLECTION TURN
+1. Read memory.md. Note the most recent LAST_FEEDBACK_EMAIL line if present.
+2. Consider the digest above and your own recent turns. Identify material events from the last 24h.
+3. Extract AT MOST 3 high-leverage learnings. Concrete, behavior-changing. Skip vague platitudes and single-event overfitting.
+4. Append the learnings to memory.md (prefer append over overwrite).
+5. If a learning warrants a SOUL / BOUNDARIES / TOOLS change, call agent_config. Maximum ONE config mutation this turn. Add a "CONFIG_CHANGE: <field> — <one-line rationale>" line to memory.md.
+6. If owner feedback would materially improve future behavior AND the most recent LAST_FEEDBACK_EMAIL in memory.md is older than 7 days (or absent), send ONE short email to the owner via send_email with 1-3 targeted questions (e.g. what went well, what I got wrong, what to do more or less of). Then write "LAST_FEEDBACK_EMAIL: <ISO timestamp>" to memory.md. Otherwise DO NOT send an email.
+7. End the turn with decide("sleep").
+
+## HARD GUARDRAILS
+- Do NOT spawn tasks, wake tasks, or cancel tasks this turn.
+- Do NOT create schedules this turn.
+- Do NOT reply to emails or send non-feedback emails this turn.
+- At most 3 learnings, 1 config mutation, 1 feedback email (rate-limit enforced via memory.md).
+- No reassurance questions to the owner. Feedback questions must target concrete decisions or preferences.`;
+}
+
+async function processReflectionChain(
+  rootTaskId: string,
+  agentId: string,
+  turnState: { turnNumber: number; lastStopReason: string | null },
+  setRunningState: () => Promise<void>,
+  lastReflectionAt: { value: string | null },
+): Promise<DecisionResult | null> {
+  const gate = await runActivityGate(agentId, 24);
+
+  if (!gate.hasActivity) {
+    turnState.turnNumber++;
+    const turnLogId = await insertTurnLog(rootTaskId, {
+      turnNumber: turnState.turnNumber,
+      fromState: "SLEEPING",
+      toState: "SLEEPING",
+      trigger: "sleeping_phase_no_delta",
+    });
+    await updateTurnLogReflection(turnLogId, `no material activity in 24h — skipped (${gate.summary})`);
+    await updateTurnLogStopReason(turnLogId, "sleeping_phase_no_delta");
+    lastReflectionAt.value = new Date().toISOString();
+    return null;
+  }
+
+  const childIds = gate.activeChildTaskIds;
+  const settled = await Promise.all(
+    childIds.map(async (childTaskId) => {
+      try {
+        const digest = await runChildReflectionStep(childTaskId);
+        return { childTaskId, ok: true as const, digest };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { childTaskId, ok: false as const, message };
+      }
+    }),
+  );
+
+  let accumulatedDigest = "";
+  for (const r of settled) {
+    accumulatedDigest += r.ok
+      ? `\n\n### task:${r.childTaskId}\n${r.digest}`
+      : `\n\n### task:${r.childTaskId}\n(child reflection failed: ${r.message})`;
+  }
+
+  for (const r of settled) {
+    if (r.ok) continue;
+    turnState.turnNumber++;
+    const errTurnLogId = await insertTurnLog(rootTaskId, {
+      turnNumber: turnState.turnNumber,
+      fromState: "SLEEPING",
+      toState: "SLEEPING",
+      trigger: "sleeping_phase_child_error",
+    });
+    await updateTurnLogStopReason(
+      errTurnLogId,
+      `child reflection failed for ${r.childTaskId}: ${r.message}`,
+    );
+  }
+
+  const reflectionWake: WakeDetails = {
+    trigger: "sleeping_phase",
+    wokenBy: "sleep",
+    triggerContext: `Nightly sleeping-phase reflection. ${gate.summary}`,
+    metadata: [
+      { label: "ROOT_TURN_COUNT", value: String(gate.rootTurnCount) },
+      { label: "ACTIVE_CHILD_COUNT", value: String(gate.activeChildTaskIds.length) },
+    ],
+    actionNow: buildReflectionActionNow(accumulatedDigest),
+  };
+
+  const decision = await processWakeTurn(rootTaskId, reflectionWake, {
+    includeContextSeed: false,
+    priorState: "SLEEPING",
+    turnState,
+    setRunningState,
+  });
+  lastReflectionAt.value = new Date().toISOString();
+  return decision;
 }
 
 async function processWakeTurn(
@@ -327,6 +452,9 @@ export async function taskWorkflow(
     turnNumber: resumeInput?.resumedFrom?.turnNumber ?? 0,
     lastStopReason: resumeInput?.resumedFrom?.lastStopReason ?? null as string | null,
   };
+  const lastReflectionAt: { value: string | null } = {
+    value: normalizeReflectionTimestamp(resumeInput?.resumedFrom?.lastReflectionAt),
+  };
 
   setHandler(onEmailSignal, (email: InboundEmail) => {
     emailQueue.push(email);
@@ -356,6 +484,7 @@ export async function taskWorkflow(
       turnNumber: turnState.turnNumber,
       lastStopReason: turnState.lastStopReason,
       nextWakeAt: runtimeState.nextWakeAt,
+      lastReflectionAt: lastReflectionAt.value,
       pendingEmailCount: emailQueue.length,
       pendingOwnerCount: ownerQueue.length,
       pendingScheduleCount: scheduleQueue.length,
@@ -428,11 +557,13 @@ export async function taskWorkflow(
       await setCompletedState();
       await dormantLoop(
         taskId,
+        agentId,
         isRoot,
         emailQueue,
         scheduleQueue,
         ownerQueue,
         turnState,
+        lastReflectionAt,
         persistRuntime,
         setRunningState,
         setCompletedState,
@@ -443,12 +574,14 @@ export async function taskWorkflow(
 
     await activeLoop(
       taskId,
+      agentId,
       isRoot,
       emailQueue,
       scheduleQueue,
       ownerQueue,
       turnState,
       restartDecision,
+      lastReflectionAt,
       {
         persistRuntime,
         setRunningState,
@@ -461,11 +594,13 @@ export async function taskWorkflow(
 
     await dormantLoop(
       taskId,
+      agentId,
       isRoot,
       emailQueue,
       scheduleQueue,
       ownerQueue,
       turnState,
+      lastReflectionAt,
       persistRuntime,
       setRunningState,
       setCompletedState,
@@ -495,11 +630,13 @@ export async function taskWorkflow(
     await setCompletedState();
     await dormantLoop(
       taskId,
+      agentId,
       isRoot,
       emailQueue,
       scheduleQueue,
       ownerQueue,
       turnState,
+      lastReflectionAt,
       persistRuntime,
       setRunningState,
       setCompletedState,
@@ -510,12 +647,14 @@ export async function taskWorkflow(
 
   await activeLoop(
     taskId,
+    agentId,
     isRoot,
     emailQueue,
     scheduleQueue,
     ownerQueue,
     turnState,
     firstDecision,
+    lastReflectionAt,
     {
       persistRuntime,
       setRunningState,
@@ -528,11 +667,13 @@ export async function taskWorkflow(
 
   await dormantLoop(
     taskId,
+    agentId,
     isRoot,
     emailQueue,
     scheduleQueue,
     ownerQueue,
     turnState,
+    lastReflectionAt,
     persistRuntime,
     setRunningState,
     setCompletedState,
@@ -542,12 +683,14 @@ export async function taskWorkflow(
 
 async function activeLoop(
   taskId: string,
+  agentId: string,
   isRoot: boolean,
   emailQueue: InboundEmail[],
   scheduleQueue: ScheduleEvent[],
   ownerQueue: string[],
   turnState: { turnNumber: number; lastStopReason: string | null },
   initialDecision: DecisionResult,
+  lastReflectionAt: { value: string | null },
   runtime: {
     persistRuntime: () => void;
     setRunningState: () => Promise<void>;
@@ -562,7 +705,13 @@ async function activeLoop(
   turnState.lastStopReason = initialDecision.stopReason;
 
   while (true) {
-    const sleepMs = decision.sleepDurationMs ?? DAY_MS;
+    const baseSleepMs = decision.sleepDurationMs ?? DAY_MS;
+    const now = new Date();
+    const reflectionBoundMs = isRoot
+      ? timeUntilNextReflection(now, lastReflectionAt.value)
+      : Number.POSITIVE_INFINITY;
+    const sleepMs = Math.min(baseSleepMs, reflectionBoundMs);
+
     await runtime.setSleepingState(sleepMs);
     currentState = "SLEEPING";
 
@@ -570,6 +719,36 @@ async function activeLoop(
       () => emailQueue.length > 0 || ownerQueue.length > 0 || scheduleQueue.length > 0,
       sleepMs,
     );
+
+    if (
+      isRoot &&
+      emailQueue.length === 0 &&
+      ownerQueue.length === 0 &&
+      scheduleQueue.length === 0 &&
+      reflectionIsDue(new Date(), lastReflectionAt.value)
+    ) {
+      const reflectionDecision = await processReflectionChain(
+        taskId,
+        agentId,
+        turnState,
+        runtime.setRunningState,
+        lastReflectionAt,
+      );
+      if (reflectionDecision) {
+        decision = reflectionDecision;
+        currentState = "RUNNING";
+        if (decision.type === "escalate") {
+          await runtime.setEscalatedState();
+          currentState = "ESCALATED";
+          const gotResponse = await condition(() => ownerQueue.length > 0, ESCALATION_TIMEOUT_MS);
+          if (!gotResponse) {
+            continue;
+          }
+          // Fall through to next iteration — the owner response will be drained there.
+        }
+      }
+      continue;
+    }
 
     let wake: WakeDetails;
 
@@ -580,9 +759,9 @@ async function activeLoop(
           trigger: "owner_response",
           wokenBy: "owner",
           channel: "email",
-          triggerContext: `Owner sent a message (messageId=${ownerWake.messageId}).`,
+          triggerContext: "Owner sent a message.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: `Use read_email with messageId "${ownerWake.messageId}" to read the owner email, then act on it.`,
+          actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
         };
       } else {
         const inlineContext = ownerWake.message
@@ -675,9 +854,9 @@ async function activeLoop(
           trigger: "owner_response",
           wokenBy: "owner",
           channel: "email",
-          triggerContext: `Owner responded to escalation (messageId=${ownerWake.messageId}).`,
+          triggerContext: "Owner responded to escalation.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: `Use read_email with messageId "${ownerWake.messageId}" to read the owner's escalation response, then proceed.`,
+          actionNow: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed.",
         };
       } else {
         const inlineContext = ownerWake.message
@@ -715,11 +894,13 @@ async function activeLoop(
 
 async function dormantLoop(
   taskId: string,
+  agentId: string,
   isRoot: boolean,
   emailQueue: InboundEmail[],
   scheduleQueue: ScheduleEvent[],
   ownerQueue: string[],
   turnState: { turnNumber: number; lastStopReason: string | null },
+  lastReflectionAt: { value: string | null },
   persistRuntime: () => void,
   setRunningState: () => Promise<void>,
   setCompletedState: (phase?: TaskWorkflowPhase) => Promise<void>,
@@ -753,9 +934,9 @@ async function dormantLoop(
           trigger: "owner_response",
           wokenBy: "owner",
           channel: "email",
-          triggerContext: `Owner sent a message to completed task (messageId=${ownerWake.messageId}). Reanimating.`,
+          triggerContext: "Owner sent a message to completed task. Reanimating.",
           metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: `Use read_email with messageId "${ownerWake.messageId}" to inspect the owner's new request and decide whether to resume work.`,
+          actionNow: "Use read_email with the MESSAGE_ID above to inspect the owner's new request and decide whether to resume work.",
         };
       } else {
         const inlineContext = ownerWake.message
@@ -819,12 +1000,14 @@ async function dormantLoop(
 
     await activeLoop(
       taskId,
+      agentId,
       isRoot,
       emailQueue,
       scheduleQueue,
       ownerQueue,
       turnState,
       decision,
+      lastReflectionAt,
       {
         persistRuntime,
         setRunningState,

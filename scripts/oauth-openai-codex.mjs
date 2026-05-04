@@ -10,7 +10,7 @@
  *   node scripts/oauth-openai-codex.mjs
  *   pnpm oauth:openai            (if the package.json script is added)
  */
-import { loginOpenAICodex } from "../repos/pi-mono/packages/ai/dist/oauth.js";
+import { loginOpenAICodex } from "@mariozechner/pi-ai/oauth";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";

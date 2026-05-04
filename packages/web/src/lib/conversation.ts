@@ -3,6 +3,7 @@ export type ConversationRow = {
   role: string;
   message: string;
   timestamp: string;
+  orderingKey: string;
 };
 
 export type TurnLogRow = {
@@ -18,6 +19,7 @@ export type TurnLogRow = {
 
 export type ParsedContent =
   | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
   | { kind: "toolCall"; id?: string; name: string; args: unknown }
   | { kind: "toolResult"; id?: string; name?: string; output: string }
   | { kind: "json"; value: unknown };
@@ -31,6 +33,7 @@ const ANSI_RE = new RegExp(
   `[${ESC}${CSI}][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d/#&.:=?%@~_]*)*)?${BEL})|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))`,
   "g",
 );
+const THINKING_FALLBACK_TEXT = "Thinking metadata recorded, no readable summary available.";
 
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, "");
@@ -111,6 +114,12 @@ export function parseConversationMessage(raw: string): ParsedContent[] {
       const type = part.type;
       if (type === "text" && typeof part.text === "string") {
         out.push({ kind: "text", text: part.text });
+      } else if (type === "thinking") {
+        const text = typeof part.thinking === "string" ? part.thinking.trim() : "";
+        const hasMetadata = typeof part.thinkingSignature === "string" || part.redacted === true;
+        if (text || hasMetadata) {
+          out.push({ kind: "thinking", text: text || THINKING_FALLBACK_TEXT });
+        }
       } else if (type === "toolCall") {
         out.push({
           kind: "toolCall",
@@ -142,6 +151,7 @@ export function parseConversationMessage(raw: string): ParsedContent[] {
 
 export type DisplayBlock =
   | { kind: "role"; role: string; timestamp: string; text: string; rowId: number }
+  | { kind: "thinking"; timestamp: string; text: string; rowId: number }
   | {
       kind: "toolPair";
       rowId: number;
@@ -230,6 +240,13 @@ export function buildDisplayBlocks(rows: ConversationRow[]): DisplayBlock[] {
           text: part.text,
           rowId: row.id,
         });
+      } else if (part.kind === "thinking") {
+        blocks.push({
+          kind: "thinking",
+          timestamp: row.timestamp,
+          text: part.text,
+          rowId: row.id,
+        });
       } else if (part.kind === "toolCall") {
         const blockIndex = blocks.length;
         blocks.push({
@@ -286,6 +303,9 @@ export function matchBlock(block: DisplayBlock, needle: string): boolean {
   if (block.kind === "role") {
     return block.text.toLowerCase().includes(q) || block.role.toLowerCase().includes(q);
   }
+  if (block.kind === "thinking") {
+    return "thinking".includes(q) || block.text.toLowerCase().includes(q);
+  }
   const name = block.call.name.toLowerCase();
   if (name.includes(q)) return true;
   const argsStr = formatJson(block.call.args).toLowerCase();
@@ -299,7 +319,15 @@ export function matchBlock(block: DisplayBlock, needle: string): boolean {
 export function getLatestConversationPreview(
   rows: ConversationRow[],
 ): LatestConversationPreview | null {
-  const latest = buildDisplayBlocks(rows).at(-1);
+  const blocks = buildDisplayBlocks(rows);
+  let latest: Exclude<DisplayBlock, { kind: "thinking" }> | undefined;
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    const block = blocks[index];
+    if (block && block.kind !== "thinking") {
+      latest = block;
+      break;
+    }
+  }
 
   if (!latest) {
     return null;

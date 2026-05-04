@@ -38,9 +38,9 @@ describe("decide tool", () => {
 
 [DONE]
 - Replied`);
-    let captured: DecisionResult | null = null;
+    let captured: { type: DecisionResult["type"] } | null = null;
     const tool = createDecideTool((decision) => {
-      captured = decision;
+      captured = decision as DecisionResult;
     }, { todoFilePath: todoPath });
 
     const result = await tool.execute("call-1", {
@@ -50,7 +50,8 @@ describe("decide tool", () => {
     });
 
     expect(getText(result)).toContain("Decision recorded: sleep");
-    expect(captured?.type).toBe("sleep");
+    const capturedType = (captured as { type: DecisionResult["type"] } | null)?.type;
+    expect(capturedType).toBe("sleep");
   });
 
   it("rejects sleep when actionable work remains", async () => {
@@ -64,9 +65,9 @@ describe("decide tool", () => {
 
 [DONE]
 - Read the email`);
-    let captured: DecisionResult | null = null;
+    let captured: { type: DecisionResult["type"] } | null = null;
     const tool = createDecideTool((decision) => {
-      captured = decision;
+      captured = decision as DecisionResult;
     }, { todoFilePath: todoPath });
 
     const result = await tool.execute("call-2", {
@@ -91,9 +92,9 @@ describe("decide tool", () => {
 
 [DONE]
 - Read the email`);
-    let captured: DecisionResult | null = null;
+    let captured: { type: DecisionResult["type"] } | null = null;
     const tool = createDecideTool((decision) => {
-      captured = decision;
+      captured = decision as DecisionResult;
     }, { todoFilePath: todoPath });
 
     await tool.execute("call-4", {
@@ -114,6 +115,7 @@ describe("decide tool", () => {
 
     expect(getText(result)).toContain("Decision recorded: defer");
     expect(result.details).toMatchObject({ autoDeferred: true, type: "defer" });
-    expect(captured?.type).toBe("defer");
+    const capturedType = (captured as { type: DecisionResult["type"] } | null)?.type;
+    expect(capturedType).toBe("defer");
   });
 });

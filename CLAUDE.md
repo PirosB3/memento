@@ -17,7 +17,7 @@ Four processes compose the system:
 3. **@summon/email-gateway** (`packages/email-gateway`) — Polling-based email gateway (15s interval). Routes inbound emails to Temporal signals: `+tag` emails → child task workflow, untagged emails → root task workflow.
 4. **@summon/shared** (`packages/shared`) — Prisma client, DB schema, shared types, system prompt builder, logging.
 
-**External dependency**: `repos/pi-mono` — Pi agent framework. Must be built locally with `tsc` before worker can use it. Use the `Agent` class from `@mariozechner/pi-agent-core` (not `createAgentSession` from `pi-coding-agent`). Import from `../../repos/pi-mono/packages/agent/dist/index.js`.
+**Pi dependency**: install from npm. Use the `Agent` class from `@mariozechner/pi-agent-core` (not `createAgentSession` from `pi-coding-agent`) and AI helpers from `@mariozechner/pi-ai`.
 
 ## Root Task vs Child Task Architecture
 
@@ -165,10 +165,8 @@ pnpm db:studio         # Open Prisma Studio GUI
 pnpm test
 pnpm test:e2e
 
-# Build pi-mono (required before worker can run)
-cd repos/pi-mono && npm install
-npx tsc -p packages/ai/tsconfig.build.json
-npx tsc -p packages/agent/tsconfig.build.json
+# Install dependencies (includes Pi libraries from npm)
+pnpm install
 
 # Temporal UI: http://localhost:8233
 # PostgreSQL: localhost:5432 (user: summon, password: summon)

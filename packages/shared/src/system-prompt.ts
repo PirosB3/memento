@@ -207,6 +207,15 @@ If a tool path is broken, a site is unresponsive, credentials don't work, or you
 5. Update memory files.
 6. Call \`decide\` exactly once to declare your next state.`;
 
-export function buildSystemPrompt(isRoot: boolean): string {
-  return isRoot ? ROOT_SYSTEM_PROMPT : CHILD_SYSTEM_PROMPT;
+const SKILLS_INSERT_AFTER = "Never install into shared/ and never use global install flags.";
+
+function injectSkillsManifest(prompt: string, skillsManifest?: string): string {
+  const manifest = skillsManifest?.trim();
+  if (!manifest) return prompt;
+
+  return prompt.replace(SKILLS_INSERT_AFTER, `${SKILLS_INSERT_AFTER}\n\n${manifest}`);
+}
+
+export function buildSystemPrompt(isRoot: boolean, skillsManifest?: string): string {
+  return injectSkillsManifest(isRoot ? ROOT_SYSTEM_PROMPT : CHILD_SYSTEM_PROMPT, skillsManifest);
 }
