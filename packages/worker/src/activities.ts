@@ -14,7 +14,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { buildContextSeedMessage, buildWakeMessage } from "./prompt-context.js";
-import type { WakeSource } from "@summon/shared";
+import type { WakeChannel, WakeSource } from "@summon/shared";
 import {
   buildInvalidTodoNotice,
   buildMissingTodoNotice,
@@ -55,6 +55,7 @@ export interface PreparePromptMessagesInput {
   includeContextSeed: boolean;
   wake: {
     wokenBy: WakeSource;
+    channel: WakeChannel;
     priorState: string;
     lastStopReason?: string | null;
     triggerContext: string;

@@ -51,12 +51,13 @@ describe("workflows", () => {
           includeContextSeed: boolean;
           wake: {
             wokenBy: string;
+            channel: string;
             metadata?: Array<{ label: string; value: string }>;
           };
         },
       ) => ({
         contextSeedMessage: input.includeContextSeed ? "## CONTEXT SEED" : null,
-        wakeMessage: `## WAKE\nWOKEN BY: ${input.wake.wokenBy}\n${input.wake.metadata?.map((item) => `${item.label}: ${item.value}`).join("\n") ?? ""}`,
+        wakeMessage: `## WAKE\nWOKEN BY: ${input.wake.wokenBy}\nWAKE CHANNEL: ${input.wake.channel}\n${input.wake.metadata?.map((item) => `${item.label}: ${item.value}`).join("\n") ?? ""}`,
       }),
     );
     const runPiAgentTurn = vi
@@ -121,6 +122,12 @@ describe("workflows", () => {
       "task-1",
       expect.objectContaining({
         content: expect.stringContaining("MESSAGE_ID: msg-123"),
+      }),
+    );
+    expect(insertConversationMessage).toHaveBeenCalledWith(
+      "task-1",
+      expect.objectContaining({
+        content: expect.stringContaining("WAKE CHANNEL: email"),
       }),
     );
     await env.teardown();
