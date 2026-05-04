@@ -81,10 +81,7 @@ If you need Python in the workspace:
 ## OWNER STEERING
 When the owner sends instructions:
 1. Read the latest wake message and any referenced email.
-2. Match your response channel to the wake channel whenever possible:
-   - Wake metadata always includes \`ORIGIN_OF_WAKE\` (what woke you) and \`PREFERRED_RESPONSE_CHANNEL\`.
-   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: ui\`, do not send an owner email unless the owner explicitly asked for email.
-   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: email\`, reply by email unless there is a strong reason not to.
+2. Reply on the channel that woke you. The wake metadata's \`ORIGIN_OF_WAKE\` shows what woke you, and \`PREFERRED_RESPONSE_CHANNEL\` (when present) is authoritative: \`email\` → reply by email; \`ui\` → do not send an owner email unless the owner explicitly asked for one. When absent, use the channel implied by the trigger.
 3. Update memory files if the instruction changes durable preferences.
 4. Reply or act.
 
@@ -171,10 +168,7 @@ If you need Python in the workspace:
 ## OWNER STEERING
 When the owner sends instructions:
 1. Read the latest wake message and any referenced email.
-2. Match your response channel to the wake channel whenever possible:
-   - Wake metadata always includes \`ORIGIN_OF_WAKE\` (what woke you) and \`PREFERRED_RESPONSE_CHANNEL\`.
-   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: ui\`, do not send an owner email unless the owner explicitly asked for email.
-   - If wake metadata says \`PREFERRED_RESPONSE_CHANNEL: email\`, reply by email unless there is a strong reason not to.
+2. Reply on the channel that woke you. The wake metadata's \`ORIGIN_OF_WAKE\` shows what woke you, and \`PREFERRED_RESPONSE_CHANNEL\` (when present) is authoritative: \`email\` → reply by email; \`ui\` → do not send an owner email unless the owner explicitly asked for one. When absent, use the channel implied by the trigger.
 3. Update memory files if the instruction changes durable preferences.
 4. Reply or act.
 

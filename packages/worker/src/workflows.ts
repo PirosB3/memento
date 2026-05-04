@@ -112,33 +112,22 @@ interface WakeDetails {
   actionNow: string;
 }
 
-function getMetadataValue(
-  metadata: Array<{ label: string; value: string }> | undefined,
-  label: string,
-): string | undefined {
-  return metadata?.find((item) => item.label === label)?.value;
-}
-
 function enrichWakeMetadata(wake: WakeDetails): Array<{ label: string; value: string }> {
   const existing = wake.metadata ?? [];
-  const source = getMetadataValue(existing, "SOURCE");
+  const source = existing.find((item) => item.label === "SOURCE")?.value;
   const originOfWake = source
     ? `${wake.trigger}:${source}`
     : `${wake.trigger}:${wake.wokenBy}`;
 
-  const withOrigin = existing.some((item) => item.label === "ORIGIN_OF_WAKE")
-    ? existing
-    : [{ label: "ORIGIN_OF_WAKE", value: originOfWake }, ...existing];
+  // Only owner_response wakes have an unambiguous reply channel: SOURCE present
+  // means the owner reached us via UI (inline wake); absence means email.
+  const channel = wake.trigger === "owner_response" ? (source ? "ui" : "email") : null;
 
-  if (withOrigin.some((item) => item.label === "PREFERRED_RESPONSE_CHANNEL")) {
-    return withOrigin;
-  }
-
-  const inferredChannel = wake.trigger === "owner_response"
-    ? (wake.wokenBy === "owner" ? "email" : "ui")
-    : "same_as_trigger";
-
-  return [...withOrigin, { label: "PREFERRED_RESPONSE_CHANNEL", value: inferredChannel }];
+  return [
+    { label: "ORIGIN_OF_WAKE", value: originOfWake },
+    ...(channel ? [{ label: "PREFERRED_RESPONSE_CHANNEL", value: channel }] : []),
+    ...existing,
+  ];
 }
 
 export const onEmailSignal = defineSignal<[InboundEmail]>("on_email");
@@ -194,6 +183,63 @@ function describeInlineWakeSource(source: string): string {
   if (source === "owner") return "owner direct message";
   if (source === "root_task") return "root task message";
   return source;
+}
+
+type OwnerWakeVariant = "active" | "escalated" | "dormant";
+
+function buildOwnerWake(payload: string, variant: OwnerWakeVariant): WakeDetails {
+  const ownerWake = parseOwnerWakeEvent(payload);
+
+  if (ownerWake.kind === "email") {
+    return {
+      trigger: "owner_response",
+      wokenBy: "owner",
+      triggerContext: {
+        active: "Owner sent a message.",
+        escalated: "Owner responded to escalation.",
+        dormant: "Owner sent a message to completed task. Reanimating.",
+      }[variant],
+      metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
+      actionNow: {
+        active: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
+        escalated: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed.",
+        dormant: "Use read_email with the MESSAGE_ID above to inspect the owner's new request and decide whether to resume work.",
+      }[variant],
+    };
+  }
+
+  const sourceLabel = describeInlineWakeSource(ownerWake.source);
+  const message = ownerWake.message;
+  return {
+    trigger: "owner_response",
+    wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
+    triggerContext: {
+      active: message
+        ? `Received an inline wake from ${sourceLabel} with message: ${message}`
+        : `Received an inline wake from ${sourceLabel}.`,
+      escalated: message
+        ? `Received an inline wake from ${sourceLabel} while escalated: ${message}`
+        : `Received an inline wake from ${sourceLabel} while escalated.`,
+      dormant: message
+        ? `Received an inline wake from ${sourceLabel} for a completed task: ${message}`
+        : `Received an inline wake from ${sourceLabel} for a completed task. Reanimating.`,
+    }[variant],
+    metadata: [
+      { label: "SOURCE", value: ownerWake.source },
+      ...(message ? [{ label: "INLINE_MESSAGE", value: message }] : []),
+    ],
+    actionNow: {
+      active: message
+        ? `Act on the inline instruction: ${message}`
+        : `Act on the inline instruction from ${sourceLabel}.`,
+      escalated: message
+        ? `Resolve the escalation using the inline instruction: ${message}`
+        : `Resolve the escalation using the inline instruction from ${sourceLabel}.`,
+      dormant: message
+        ? `Use the inline instruction to decide whether to resume the completed task: ${message}`
+        : `Use the inline instruction from ${sourceLabel} to decide whether to resume work.`,
+    }[variant],
+  };
 }
 
 function isoFromNow(ms: number): string {
@@ -776,37 +822,7 @@ async function activeLoop(
     let wake: WakeDetails;
 
     if (ownerQueue.length > 0) {
-      const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
-      if (ownerWake.kind === "email") {
-        wake = {
-          trigger: "owner_response",
-          wokenBy: "owner",
-          triggerContext: "Owner sent a message.",
-          metadata: [
-            { label: "MESSAGE_ID", value: ownerWake.messageId },
-            { label: "PREFERRED_RESPONSE_CHANNEL", value: "email" },
-          ],
-          actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it. Prefer responding over email to match the wake channel.",
-        };
-      } else {
-        const preferredResponseChannel = "ui";
-        const inlineContext = ownerWake.message
-          ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} with message: ${ownerWake.message}`
-          : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)}.`;
-        wake = {
-          trigger: "owner_response",
-          wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
-          triggerContext: inlineContext,
-          metadata: [
-            { label: "SOURCE", value: ownerWake.source },
-            { label: "PREFERRED_RESPONSE_CHANNEL", value: preferredResponseChannel },
-            ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
-          ],
-          actionNow: ownerWake.message
-            ? `Act on the inline instruction: ${ownerWake.message}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`
-            : `Act on the inline instruction from ${describeInlineWakeSource(ownerWake.source)}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`,
-        };
-      }
+      wake = buildOwnerWake(ownerQueue.shift()!, "active");
     } else if (scheduleQueue.length > 0) {
       const schedules = scheduleQueue.splice(0);
       wake = {
@@ -869,39 +885,7 @@ async function activeLoop(
         continue;
       }
 
-      const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
-      let escalationWake: WakeDetails;
-
-      if (ownerWake.kind === "email") {
-        escalationWake = {
-          trigger: "owner_response",
-          wokenBy: "owner",
-          triggerContext: "Owner responded to escalation.",
-          metadata: [
-            { label: "MESSAGE_ID", value: ownerWake.messageId },
-            { label: "PREFERRED_RESPONSE_CHANNEL", value: "email" },
-          ],
-          actionNow: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed. Prefer responding over email to match the wake channel.",
-        };
-      } else {
-        const preferredResponseChannel = "ui";
-        const inlineContext = ownerWake.message
-          ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated: ${ownerWake.message}`
-          : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated.`;
-        escalationWake = {
-          trigger: "owner_response",
-          wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
-          triggerContext: inlineContext,
-          metadata: [
-            { label: "SOURCE", value: ownerWake.source },
-            { label: "PREFERRED_RESPONSE_CHANNEL", value: preferredResponseChannel },
-            ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
-          ],
-          actionNow: ownerWake.message
-            ? `Resolve the escalation using the inline instruction: ${ownerWake.message}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`
-            : `Resolve the escalation using the inline instruction from ${describeInlineWakeSource(ownerWake.source)}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`,
-        };
-      }
+      const escalationWake = buildOwnerWake(ownerQueue.shift()!, "escalated");
 
       decision = await processWakeTurn(taskId, escalationWake, {
         includeContextSeed: false,
@@ -954,37 +938,7 @@ async function dormantLoop(
     let wake: WakeDetails;
 
     if (ownerQueue.length > 0) {
-      const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
-      if (ownerWake.kind === "email") {
-        wake = {
-          trigger: "owner_response",
-          wokenBy: "owner",
-          triggerContext: "Owner sent a message to completed task. Reanimating.",
-          metadata: [
-            { label: "MESSAGE_ID", value: ownerWake.messageId },
-            { label: "PREFERRED_RESPONSE_CHANNEL", value: "email" },
-          ],
-          actionNow: "Use read_email with the MESSAGE_ID above to inspect the owner's new request and decide whether to resume work. Prefer responding over email to match the wake channel.",
-        };
-      } else {
-        const preferredResponseChannel = "ui";
-        const inlineContext = ownerWake.message
-          ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} for a completed task: ${ownerWake.message}`
-          : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} for a completed task. Reanimating.`;
-        wake = {
-          trigger: "owner_response",
-          wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
-          triggerContext: inlineContext,
-          metadata: [
-            { label: "SOURCE", value: ownerWake.source },
-            { label: "PREFERRED_RESPONSE_CHANNEL", value: preferredResponseChannel },
-            ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
-          ],
-          actionNow: ownerWake.message
-            ? `Use the inline instruction to decide whether to resume the completed task: ${ownerWake.message}. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`
-            : `Use the inline instruction from ${describeInlineWakeSource(ownerWake.source)} to decide whether to resume work. Prefer responding via ${preferredResponseChannel.toUpperCase()} to match this wake channel.`,
-        };
-      }
+      wake = buildOwnerWake(ownerQueue.shift()!, "dormant");
     } else if (scheduleQueue.length > 0) {
       const schedules = scheduleQueue.splice(0);
       wake = {
