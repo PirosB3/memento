@@ -582,7 +582,7 @@ function TaskRow({
           {taskAliasEmail(agentEmail, task)}
         </span>
       </span>
-      {selected ? <StatusPill status={status} /> : null}
+      <StatusPill status={status} />
     </Link>
   );
 }
