@@ -38,23 +38,18 @@ function describeChannelReplyRule(channel: WakeChannel): string {
   }
 }
 
-function taskEmailFor(agent: Agent, task: Task): string {
-  if (task.isRoot) {
-    return agent.agentEmail;
-  }
-
-  const [localPart, domain] = agent.agentEmail.split("@");
-  return `${localPart}+${task.tag}@${domain}`;
-}
-
 export function buildContextSeedMessage(agent: Agent, task: Task): string {
+  const slugLine = task.isRoot
+    ? "THREAD REF: root"
+    : `THREAD REF: ${task.slug ?? "(unset)"}`;
   return `## CONTEXT SEED
 Treat this message as stable reference context for the task. It is not a new request.
 
 ROLE: ${task.isRoot ? "root" : "child"}
 AGENT NAME: ${agent.name}
 OWNER EMAIL: ${agent.ownerEmail}
-TASK EMAIL: ${taskEmailFor(agent, task)}
+AGENT EMAIL: ${agent.agentEmail}
+${slugLine}
 
 ## OBJECTIVE
 ${task.objective}

@@ -82,7 +82,6 @@ export interface InboundEmail {
   sender: string;
   inboxId: string;
   timestamp: string;
-  tag?: string;
   batchMessageIds?: string[];
   batchSenders?: string[];
 }

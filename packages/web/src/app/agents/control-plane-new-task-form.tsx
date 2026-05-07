@@ -21,6 +21,7 @@ export default function ControlPlaneNewTaskForm({
 }) {
   const [step, setStep] = useState<Step>("closed");
   const [objective, setObjective] = useState("");
+  const [seedThreadId, setSeedThreadId] = useState("");
   const [questions, setQuestions] = useState<string[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -29,6 +30,7 @@ export default function ControlPlaneNewTaskForm({
   function resetForm(nextStep: Step = "closed") {
     setStep(nextStep);
     setObjective("");
+    setSeedThreadId("");
     setQuestions([]);
     setAnswers({});
     setError(null);
@@ -75,7 +77,11 @@ export default function ControlPlaneNewTaskForm({
       const response = await fetch(`/api/agents/${agentId}/tasks`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ objective, answers }),
+        body: JSON.stringify({
+          objective,
+          answers,
+          seedThreadId: seedThreadId.trim() || undefined,
+        }),
       });
 
       const body = await response.json().catch(() => null) as (CreatedTaskResponse & { error?: string }) | null;
@@ -161,6 +167,17 @@ export default function ControlPlaneNewTaskForm({
               />
             </label>
           ))}
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>Thread slug (advanced — leave blank to auto-generate)</span>
+            <input
+              type="text"
+              value={seedThreadId}
+              onChange={(event) => setSeedThreadId(event.target.value)}
+              placeholder="e.g. union-market-cart-2026-04-25"
+              className="h-8 rounded-lg border border-input bg-background px-2 font-mono text-sm text-foreground outline-none transition-colors focus:border-ring"
+              aria-label="Optional thread slug"
+            />
+          </label>
           <div className="flex gap-2">
             <Button type="button" variant="outline" size="sm" className="flex-1" onClick={() => resetForm()}>
               Cancel

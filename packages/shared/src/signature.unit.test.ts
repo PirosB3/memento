@@ -48,6 +48,28 @@ describe("buildTextSignature", () => {
     expect(text).toContain("Personal Assistant\n");
     expect(text).not.toContain(" · ");
   });
+
+  it("appends `ref: <slug>` line when threadRef is set", () => {
+    const text = buildTextSignature({
+      displayName: "Emma",
+      description: null,
+      profileImageUrl: null,
+      threadRef: "union-market-cart-2026-04-25",
+    });
+
+    expect(text).toContain("\nref: union-market-cart-2026-04-25\n");
+  });
+
+  it("omits the ref line when threadRef is empty/whitespace", () => {
+    const text = buildTextSignature({
+      displayName: "Emma",
+      description: null,
+      profileImageUrl: null,
+      threadRef: "   ",
+    });
+
+    expect(text).not.toContain("ref:");
+  });
 });
 
 describe("buildHtmlSignature", () => {
@@ -107,5 +129,27 @@ describe("buildHtmlSignature", () => {
     expect(html).toContain("a&amp;b.png");
     expect(html).toContain("co&amp;co.test");
     expect(html).not.toContain("<test>");
+  });
+
+  it("includes ref div when threadRef is set, escapes the slug", () => {
+    const html = buildHtmlSignature({
+      displayName: "Emma",
+      description: null,
+      profileImageUrl: null,
+      threadRef: "demo-slug-<x>",
+    });
+
+    expect(html).toContain("ref: demo-slug-&lt;x&gt;");
+    expect(html).toContain("font-size:11px");
+  });
+
+  it("omits ref div when threadRef is missing", () => {
+    const html = buildHtmlSignature({
+      displayName: "Emma",
+      description: null,
+      profileImageUrl: null,
+    });
+
+    expect(html).not.toContain("ref:");
   });
 });

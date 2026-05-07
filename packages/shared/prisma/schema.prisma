@@ -28,19 +28,21 @@ model Agent {
 }
 
 model Task {
-  taskId         String    @id @map("task_id")
-  agentId        String    @map("agent_id")
-  tag            String    @unique
-  objective      String
-  status         String    @default("RUNNING")
-  isRoot         Boolean   @default(false) @map("is_root")
-  parentTaskId   String?   @map("parent_task_id")
-  temporalRunId  String?   @map("temporal_run_id")
-  maxTurns       Int       @default(20) @map("max_turns")
-  timeoutHours   Int       @default(72) @map("timeout_hours")
-  lastActivityAt DateTime  @default(now()) @map("last_activity_at")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  completedAt    DateTime? @map("completed_at")
+  taskId             String    @id @map("task_id")
+  agentId            String    @map("agent_id")
+  tag                String    @unique
+  slug               String?
+  agentmailThreadIds String[]  @default([]) @map("agentmail_thread_ids")
+  objective          String
+  status             String    @default("RUNNING")
+  isRoot             Boolean   @default(false) @map("is_root")
+  parentTaskId       String?   @map("parent_task_id")
+  temporalRunId      String?   @map("temporal_run_id")
+  maxTurns           Int       @default(20) @map("max_turns")
+  timeoutHours       Int       @default(72) @map("timeout_hours")
+  lastActivityAt     DateTime  @default(now()) @map("last_activity_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  completedAt        DateTime? @map("completed_at")
 
   compactedSummary   String? @map("compacted_summary")
   compactedPrefix    Json?   @map("compacted_prefix")
@@ -55,6 +57,7 @@ model Task {
   schedules     Schedule[]
   turnSnapshot  TurnSnapshot?
 
+  @@unique([agentId, slug])
   @@index([agentId])
   @@index([tag])
   @@map("tasks")

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Summon Agents — a Temporal-based platform where users create AI agents that coordinate people over email. Each agent is a persistent identity (e.g. "John") with its own agentmail address. The agent has a **root task** (always-on main thread) that manages **child tasks** (scoped to specific objectives). Each child task gets its own `+uuid` email address for isolated communication.
+Summon Agents — a Temporal-based platform where users create AI agents that coordinate people over email. Each agent is a persistent identity (e.g. "John") with its own agentmail address. The agent has a **root task** (always-on main thread) that manages **child tasks** (scoped to specific objectives). All outbound mail uses the agent's bare base address; routing back to the right child task is by AgentMail's native `threadId` recorded on `tasks.agentmail_thread_ids`.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ Four processes compose the system:
 
 1. **@summon/web** (`packages/web`) — Next.js 16 App Router. Agent creation wizard (describe agent → clarifying questions → SOUL/BOUNDARIES/TOOLS review → launch). Agent dashboard with root task conversation viewer, child task creation with clarifying questions, task list with expandable conversations.
 2. **@summon/worker** (`packages/worker`) — Temporal worker. Runs `taskWorkflow` for both root and child tasks. Activities include Pi agent turns (LLM + tool execution), task management, and email operations.
-3. **@summon/email-gateway** (`packages/email-gateway`) — Polling-based email gateway (15s interval). Routes inbound emails to Temporal signals: `+tag` emails → child task workflow, untagged emails → root task workflow.
+3. **@summon/email-gateway** (`packages/email-gateway`) — Polling-based email gateway (15s interval). Routes inbound emails to Temporal signals using AgentMail's native `threadId` looked up against `tasks.agentmail_thread_ids`: matching threadId → child task workflow, no match → root task workflow.
 4. **@summon/shared** (`packages/shared`) — Prisma client, DB schema, shared types, system prompt builder, logging.
 
 **Pi dependency**: install from npm. Use the `Agent` class from `@mariozechner/pi-agent-core` (not `createAgentSession` from `pi-coding-agent`) and AI helpers from `@mariozechner/pi-ai`.
@@ -24,29 +24,30 @@ Four processes compose the system:
 ### Root Task
 - Created automatically when an agent is created
 - Workflow ID: `agent__{agentId}__root`
-- Task row: `tag = "root"`, `isRoot = true`
-- Email: base address (e.g. `mario@agentmail.to`) — no `+tag`
+- Task row: `tag = "root-{agentId}"`, `slug = NULL`, `isRoot = true`
+- Email: base address (e.g. `mario@agentmail.to`)
 - **Is a delegator, not a doer** — receives emails, spawns child tasks, monitors them, maintains memory
 - Never completes or fails — only sleeps or escalates
-- Has full CRUD tools: `spawn_task`, `wake_task`, `cancel_task`, `list_tasks`, `get_task_conversation`, `agent_config`
+- Has full CRUD tools: `spawn_task`, `wake_task`, `cancel_task`, `list_tasks`, `get_task_conversation`, `route_email_to_thread`, `agent_config`
 - Sees ALL emails in the inbox (unfiltered)
+- Outbound signature footer reads `ref: root`
 
 ### Child Task
 - Created by root's `spawn_task` tool or via web UI
 - Workflow ID: `task-{taskId}`
-- Task row: `tag = {uuid}`, `isRoot = false`
-- Email: `+uuid` address (e.g. `mario+abc123@agentmail.to`)
+- Task row: `tag = {uuid}`, `slug = <kebab-case-objective>-YYYY-MM-DD` (per-agent unique), `agentmail_thread_ids text[]`, `isRoot = false`
+- Email: same base address as the root — routing happens by `threadId`, not by recipient address
 - Focused on a single objective — cannot spawn or manage other tasks
 - Can complete/fail → enters dormant sleep loop (30-day expiry)
-- Email tools are **filtered** — can only see emails from threads involving its `+tag` address
-- Uses `replyTo` field to... **NO** — uses auto-CC of its `+tag` address on outgoing emails for routing
+- Email tools are **unfiltered** — child sees the whole inbox like root
+- Outbound mail records the AgentMail `threadId` from the response on `tasks.agentmail_thread_ids` so future inbound mail in that thread routes back here
+- Outbound signature footer reads `ref: <slug>`
 
 ### Email Routing (Gateway)
-- Gateway parses `+tag` from both `to` AND `cc` fields of incoming messages
-- `+tag` found → signal child task workflow `task-{taskId}`
-- No tag → signal root task workflow `agent__{agentId}__root`
-- Orphan tag (task not found) → signal root task
-- **Self-sent emails are skipped** (from field contains agent's own address) to prevent self-wake loops
+- Gateway reads each inbound message's AgentMail `threadId` (no recipient parsing).
+- `threadId` ∈ some task's `agentmail_thread_ids` → signal that task's workflow `task-{taskId}`.
+- No match (or null threadId) → signal root task workflow `agent__{agentId}__root`. Root may then call `route_email_to_thread(slug, message_id)` to attach the thread to an existing task.
+- **Self-sent emails are skipped** (from field contains agent's own address prefix) to prevent self-wake loops.
 
 ## Key Concepts
 
@@ -69,11 +70,12 @@ Four processes compose the system:
 | `read_email` | Read specific email by ID |
 | `read_emails` | List ALL emails (unfiltered) |
 | `list_threads` | List ALL threads (unfiltered) |
-| `spawn_task` | Create child task (non-blocking) |
+| `spawn_task` | Create child task (non-blocking). Optional `seed_thread_id` (slug, must be unique per agent) and `attach_threadId` (AgentMail threadId to bind immediately). |
 | `wake_task` | Wake sleeping child with message (errors if RUNNING) |
 | `cancel_task` | Mark child as COMPLETED |
-| `list_tasks` | List children with status + last stopReason |
+| `list_tasks` | List children with slug, status, AgentMail threads attached, last stopReason |
 | `get_task_conversation` | Read child's conversation messages |
+| `route_email_to_thread` | Attach an unmatched inbound email's AgentMail thread to an existing child task by slug. Wakes the task with the message. |
 | `agent_config` | Read/write SOUL, BOUNDARIES, TOOLS |
 | `create_schedule` | Schedule a timer for self or child task (fireAt, message, taskId?) |
 | `list_schedules` | List all scheduled timers (optionally filter by taskId) |
@@ -85,11 +87,11 @@ Four processes compose the system:
 ### Child Task Tools
 | Tool | Description |
 |------|-------------|
-| `send_email` | Send with auto-CC of `+tag` address |
-| `reply_email` | Reply with auto-CC of `+tag` address |
+| `send_email` | Send from the agent's bare base address. After send, the AgentMail `threadId` is appended to `tasks.agentmail_thread_ids`. |
+| `reply_email` | Reply from the bare base address. Same threadId-recording behavior as `send_email`. |
 | `read_email` | Read specific email by ID |
-| `read_emails` | **Filtered** — only emails from threads involving `+tag` |
-| `list_threads` | **Filtered** — only threads involving `+tag` |
+| `read_emails` | List ALL emails (unfiltered — same as root) |
+| `list_threads` | List ALL threads (unfiltered — same as root) |
 | `create_schedule` | Schedule a timer for self (fireAt, message) |
 | `list_schedules` | List own scheduled timers |
 | `cancel_schedule` | Cancel own pending scheduled timer |
@@ -100,10 +102,9 @@ Four processes compose the system:
 ## AgentMail SDK Quirks
 
 - **`from` field is SILENTLY IGNORED** on `SendMessageRequest` — not in the TypeScript types, and even if passed via `Record<string, unknown>`, it has no effect. Emails always show the base inbox address as sender.
-- **`replyTo` field WORKS** — sets the Reply-To header. However, DO NOT use it for `+tag` routing because reply-all includes the replyTo address as a recipient, causing self-send loops.
-- **Correct approach for `+tag` routing**: Auto-CC the `+tag` address on outgoing emails. When recipients reply-all, the `+tag` is preserved in CC. Gateway parses CC for routing.
-- **Thread `recipients` array** includes `+tag` addresses — use this for client-side email filtering.
-- **No server-side filtering** by to/cc/from — must fetch all and filter client-side.
+- **`replyTo` field WORKS** but isn't used for routing in this codebase.
+- **Routing approach**: every outbound `send_email` / `reply_email` records the AgentMail `threadId` from the response on the owning task's `agentmail_thread_ids` array. Inbound mail is matched on threadId via a GIN index. If `messages.send` omits `threadId`, the worker falls back to `messages.get(messageId)` for one extra round-trip.
+- **No server-side filtering** by to/cc/from — must fetch all and filter client-side if needed.
 - Use `AgentMailClient` named export (not default). The `send` method expects `to` as a string array.
 
 ## Data Model
@@ -117,7 +118,9 @@ PostgreSQL (dev: `summon_dev`, test: `summon_test`, prod: managed instance):
 - `temporal_run_id`, `created_at`
 
 ### `tasks` table
-- `task_id` (PK, UUID), `agent_id` (FK), `tag` (unique — UUID for children, "root" for root)
+- `task_id` (PK, UUID), `agent_id` (FK), `tag` (unique — UUID for children, `"root-{agentId}"` for root)
+- `slug` (nullable, unique-per-agent) — kebab-case handle used in outbound `ref:` footer + `route_email_to_thread`
+- `agentmail_thread_ids text[]` — set of AgentMail native thread IDs that route to this task. GIN index for fast lookup.
 - `is_root` — boolean, true for root task
 - `objective`, `status` (RUNNING/SLEEPING/ESCALATED/COMPLETED)
 - `parent_task_id` (FK, nullable — for forked tasks)
@@ -180,6 +183,7 @@ pnpm install
 ### Environment Variables
 Copy `.env.example` to `.env` at repo root and fill in:
 - `DATABASE_URL` — PostgreSQL connection string (default: `postgresql://summon:summon@localhost:5432/summon_dev`)
+- `DATABASE_READONLY_URL` — PostgreSQL connection string for the `summon_readonly` role. Exposed inside the worker so root's `bash` tool can run discovery queries via `psql` without risking writes. Provision the role with `SELECT` only on `public.*`.
 - `ANTHROPIC_API_KEY` — required for AI agent turns
 - `AGENTMAIL_API_KEY` — required for email operations
 - `BROWSERBASE_API_KEY` and `BROWSERBASE_PROJECT_ID` — required for `bb` and `browse`

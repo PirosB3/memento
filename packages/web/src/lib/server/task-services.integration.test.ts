@@ -54,7 +54,13 @@ describe("task services", () => {
     };
 
     db.agent.findUnique.mockResolvedValue(buildAgentRecord());
-    db.task.findFirst.mockResolvedValue(buildTaskRecord({ isRoot: true, taskId: "task-root" }));
+    // findFirst is consulted for both (a) the root task lookup (isRoot=true)
+    // and (b) per-slug uniqueness checks via ensureUniqueSlug. Branch on
+    // `where` so the slug check returns null (slug is free) without looping.
+    db.task.findFirst.mockImplementation(async (args: { where?: Record<string, unknown> }) => {
+      if (args?.where && "slug" in args.where) return null;
+      return buildTaskRecord({ isRoot: true, taskId: "task-root" });
+    });
     db.task.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) =>
       buildTaskRecord({ ...data, isRoot: false, tag: data.taskId }),
     );
@@ -71,6 +77,7 @@ describe("task services", () => {
     );
 
     expect(task.objective).toContain("Additional context");
+    expect(task.slug).toMatch(/^follow-up-with-alice/);
     expect(workflows.startTaskWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "agent-1",

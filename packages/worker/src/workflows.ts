@@ -340,6 +340,7 @@ async function processReflectionChain(
   const reflectionWake: WakeDetails = {
     trigger: "sleeping_phase",
     wokenBy: "sleep",
+    channel: "scheduler",
     triggerContext: `Nightly sleeping-phase reflection. ${gate.summary}`,
     metadata: [
       { label: "ROOT_TURN_COUNT", value: String(gate.rootTurnCount) },

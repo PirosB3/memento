@@ -22,6 +22,8 @@ export function buildTaskRecord(overrides: Record<string, unknown> = {}) {
     taskId: "task-1",
     agentId: "agent-1",
     tag: "root-agent-1",
+    slug: null,
+    agentmailThreadIds: [],
     objective: "Main thread",
     status: "RUNNING",
     isRoot: true,

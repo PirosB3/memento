@@ -106,30 +106,17 @@ export function setAgentMailClientForTests(client: AgentMailLike | null): void {
   agentmailClient = client;
 }
 
-export function addTag(email: string, tag: string): string {
-  const [local, domain] = email.split("@");
-  return `${local}+${tag}@${domain}`;
-}
+/**
+ * Optional callback invoked after a successful send/reply with the AgentMail
+ * threadId from the response. The caller (pi-turn) uses it to record the
+ * threadId on the task row so future inbound mail in this thread routes
+ * directly to the task.
+ */
+export type ThreadIdHook = (agentmailThreadId: string) => Promise<void> | void;
 
-function extractEmailAddress(addr: string): string {
-  // AgentMail returns addresses as either "user@domain" or "Display Name <user@domain>".
-  const trimmed = addr.trim();
-  if (!trimmed) return "";
-  const match = trimmed.match(/<([^>]+)>/);
-  return (match?.[1] ?? trimmed).trim().toLowerCase();
-}
-
-function createSelfAddressMatcher(agentEmail: string): (addr: string) => boolean {
-  const [local, domain] = agentEmail.toLowerCase().split("@");
-  const base = `${local}@${domain}`;
-  const taggedPrefix = `${local}+`;
-  const taggedSuffix = `@${domain}`;
-  return (addr: string) => {
-    const email = extractEmailAddress(addr);
-    if (!email) return false;
-    if (email === base) return true;
-    return email.startsWith(taggedPrefix) && email.endsWith(taggedSuffix);
-  };
+function extractThreadIdFromSendResult(result: Record<string, unknown>): string | null {
+  const raw = (result.threadId ?? result.thread_id) as unknown;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
 }
 
 function normalizeString(value: string | undefined): string | undefined {
@@ -249,7 +236,6 @@ function buildEmailPayload(
   options: {
     mode: "send" | "reply";
     agentDir: string;
-    taggedEmail?: string | null;
     signature?: AgentSignature | null;
   },
 ): OutgoingEmailInput {
@@ -270,9 +256,6 @@ function buildEmailPayload(
   }
 
   const cc = normalizeAddressList(rawParams.cc);
-  if (options.taggedEmail) {
-    cc.push(options.taggedEmail);
-  }
 
   const payload: OutgoingEmailInput = {
     text,
@@ -430,17 +413,18 @@ function extractDownloadValue<T extends string | number>(
 }
 
 // ============================================================================
-// SEND EMAIL — root sends from base, child auto-CCs its +tag address for routing
+// SEND EMAIL — sends from the agent's bare base address; threadId from the
+// AgentMail response is recorded on the task so future inbound mail in this
+// thread routes back to it.
 // ============================================================================
 
 export function createSendEmailTool(
   agentEmail: string,
   agentDir: string,
-  tag?: string,
   signature?: AgentSignature | null,
+  threadIdHook?: ThreadIdHook,
 ): AgentTool {
   const inboxId = agentEmail;
-  const taggedEmail = tag ? addTag(agentEmail, tag) : null;
 
   return {
     name: "send_email",
@@ -463,8 +447,23 @@ export function createSendEmailTool(
       try {
         const p = params as SendEmailParams;
         const agentmail = getAgentMailClient();
-        const sendParams = buildEmailPayload(p, { mode: "send", agentDir, taggedEmail, signature });
+        const sendParams = buildEmailPayload(p, { mode: "send", agentDir, signature });
         const result = await agentmail.inboxes.messages.send(inboxId, sendParams) as Record<string, unknown>;
+        const messageId = (result.messageId ?? result.message_id) as string | undefined;
+        let threadId = extractThreadIdFromSendResult(result);
+        // AgentMail's send response sometimes omits threadId; fall back to a
+        // get() to retrieve it so we can bind this thread to the task.
+        if (!threadId && threadIdHook && messageId) {
+          try {
+            const fetched = await agentmail.inboxes.messages.get(inboxId, messageId) as Record<string, unknown>;
+            threadId = extractThreadIdFromSendResult(fetched);
+          } catch {
+            // best-effort
+          }
+        }
+        if (threadId && threadIdHook) {
+          await threadIdHook(threadId);
+        }
         const toList = normalizeAddressList(p.to);
         const ccList = normalizeAddressList(sendParams.cc as string[] | undefined);
         const bccList = normalizeAddressList(sendParams.bcc as string[] | undefined);
@@ -478,9 +477,9 @@ export function createSendEmailTool(
         return {
           content: [{
             type: "text" as const,
-            text: `Email sent successfully (${recipientParts.join("; ")}; ${formatAttachmentSummary(p.attachments)}). Message ID: ${result.messageId ?? result.message_id ?? "unknown"}`,
+            text: `Email sent successfully (${recipientParts.join("; ")}; ${formatAttachmentSummary(p.attachments)}). Message ID: ${messageId ?? "unknown"}`,
           }],
-          details: { messageId: result.messageId ?? result.message_id },
+          details: { messageId, threadId },
         };
       } catch (error) {
         return {
@@ -499,12 +498,10 @@ export function createSendEmailTool(
 export function createReplyEmailTool(
   agentEmail: string,
   agentDir: string,
-  tag?: string,
   signature?: AgentSignature | null,
+  threadIdHook?: ThreadIdHook,
 ): AgentTool {
   const inboxId = agentEmail;
-  const taggedEmail = tag ? addTag(agentEmail, tag) : null;
-  const isSelfAddress = createSelfAddressMatcher(agentEmail);
 
   return {
     name: "reply_email",
@@ -525,50 +522,22 @@ export function createReplyEmailTool(
         const p = params as ReplyEmailParams;
         const agentmail = getAgentMailClient();
 
-        let replyParams: OutgoingEmailInput;
-
-        if (p.replyAll && taggedEmail) {
-          // AgentMail rejects replyAll + explicit cc, but child tasks must inject
-          // their +tag into cc for routing. Construct reply-all recipients manually
-          // and call reply() without the replyAll flag. Threading is preserved
-          // because messageId still drives In-Reply-To/References.
-          let original: Record<string, unknown>;
-          try {
-            original = await agentmail.inboxes.messages.get(inboxId, p.messageId) as Record<string, unknown>;
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : String(err);
-            throw new Error(`could not fetch original message for reply-all: ${reason}`);
-          }
-
-          const origFrom = typeof original.from === "string" ? original.from : "";
-          const origTo = Array.isArray(original.to) ? (original.to as string[]) : [];
-          const origCc = Array.isArray(original.cc) ? (original.cc as string[]) : [];
-
-          let toList = normalizeAddressList([origFrom]).filter((a) => !isSelfAddress(a));
-          let ccPool = normalizeAddressList([...origTo, ...origCc]).filter((a) => !isSelfAddress(a));
-
-          if (toList.length === 0 && ccPool.length > 0) {
-            toList = [ccPool[0]];
-            ccPool = ccPool.slice(1);
-          }
-
-          const toKeys = new Set(toList.map((a) => extractEmailAddress(a)));
-          const mergedCc = [
-            ...ccPool.filter((a) => !toKeys.has(extractEmailAddress(a))),
-            ...normalizeAddressList(p.cc).filter((a) => !isSelfAddress(a) && !toKeys.has(extractEmailAddress(a))),
-            taggedEmail,
-          ];
-
-          replyParams = buildEmailPayload(
-            { ...p, replyAll: false, cc: mergedCc },
-            { mode: "reply", agentDir, taggedEmail: null, signature },
-          );
-          replyParams.to = toList;
-        } else {
-          replyParams = buildEmailPayload(p, { mode: "reply", agentDir, taggedEmail, signature });
-        }
+        const replyParams = buildEmailPayload(p, { mode: "reply", agentDir, signature });
 
         const result = await agentmail.inboxes.messages.reply(inboxId, p.messageId, replyParams) as Record<string, unknown>;
+        const messageId = (result.messageId ?? result.message_id) as string | undefined;
+        let threadId = extractThreadIdFromSendResult(result);
+        if (!threadId && threadIdHook && messageId) {
+          try {
+            const fetched = await agentmail.inboxes.messages.get(inboxId, messageId) as Record<string, unknown>;
+            threadId = extractThreadIdFromSendResult(fetched);
+          } catch {
+            // best-effort
+          }
+        }
+        if (threadId && threadIdHook) {
+          await threadIdHook(threadId);
+        }
         const ccList = normalizeAddressList(replyParams.cc as string[] | undefined);
         const bccList = normalizeAddressList(replyParams.bcc as string[] | undefined);
         const recipientParts = [];
@@ -584,9 +553,9 @@ export function createReplyEmailTool(
         return {
           content: [{
             type: "text" as const,
-            text: `Reply sent successfully${recipientParts.length ? ` (${recipientParts.join("; ")}; ${formatAttachmentSummary(p.attachments)})` : ` (${formatAttachmentSummary(p.attachments)})`}. Message ID: ${result.messageId ?? result.message_id ?? "unknown"}`,
+            text: `Reply sent successfully${recipientParts.length ? ` (${recipientParts.join("; ")}; ${formatAttachmentSummary(p.attachments)})` : ` (${formatAttachmentSummary(p.attachments)})`}. Message ID: ${messageId ?? "unknown"}`,
           }],
-          details: { messageId: result.messageId ?? result.message_id },
+          details: { messageId, threadId },
         };
       } catch (error) {
         return {
@@ -756,7 +725,7 @@ export function createDownloadEmailAttachmentTool(agentEmail: string, ownerEmail
 }
 
 // ============================================================================
-// READ EMAILS — root sees all, child filtered by +tag in thread recipients
+// READ EMAILS — children see the unfiltered inbox just like root.
 // ============================================================================
 
 export function createReadEmailsTool(agentEmail: string): AgentTool {
@@ -793,64 +762,8 @@ export function createReadEmailsTool(agentEmail: string): AgentTool {
   };
 }
 
-/**
- * Filtered version for child tasks — only shows emails from threads
- * where the +tag address appears in recipients or senders.
- */
-export function createFilteredReadEmailsTool(agentEmail: string, tag: string): AgentTool {
-  const inboxId = agentEmail;
-  const taggedEmail = addTag(agentEmail, tag).toLowerCase();
-
-  return {
-    name: "read_emails",
-    label: "Read Emails",
-    description: "Read recent emails for this task. Only shows emails related to your task.",
-    parameters: Type.Object({
-      limit: Type.Optional(Type.Number({ description: "Max messages to return (default 10)" })),
-    }),
-    execute: async (_toolCallId, params) => {
-      try {
-        const p = params as { limit?: number };
-        const agentmail = getAgentMailClient();
-        const threadResponse = await agentmail.inboxes.threads.list(inboxId, { limit: 50 }) as Record<string, unknown>;
-        const threads = (threadResponse.threads ?? threadResponse.data ?? []) as Record<string, unknown>[];
-
-        const myThreadIds = new Set<string>();
-        for (const t of threads) {
-          const recipients = (t.recipients as string[] ?? []).map((r: string) => r.toLowerCase());
-          const senders = (t.senders as string[] ?? []).map((s: string) => s.toLowerCase());
-          const all = [...recipients, ...senders];
-          if (all.some((addr) => addr.includes(taggedEmail))) {
-            myThreadIds.add((t.threadId ?? t.thread_id) as string);
-          }
-        }
-
-        const msgResponse = await agentmail.inboxes.messages.list(inboxId, { limit: 50 }) as Record<string, unknown>;
-        const allMessages = (msgResponse.messages ?? msgResponse.data ?? []) as Record<string, unknown>[];
-        const filtered = allMessages
-          .filter((m) => myThreadIds.has((m.threadId ?? m.thread_id) as string))
-          .slice(0, p.limit ?? 10);
-
-        const formatted = filtered
-          .map((m) =>
-            `From: ${m.from ?? "unknown"}\nTo: ${JSON.stringify(m.to)}\nCC: ${JSON.stringify(m.cc)}\nSubject: ${m.subject ?? "(no subject)"}\nLabels: ${JSON.stringify(m.labels)}\nDate: ${m.createdAt ?? m.created_at ?? "unknown"}\nMessage ID: ${m.messageId ?? m.message_id}\nThread: ${m.threadId ?? m.thread_id ?? "none"}`)
-          .join("\n---\n");
-        return {
-          content: [{ type: "text" as const, text: formatted || "No messages found for this task." }],
-          details: { count: filtered.length, totalThreads: myThreadIds.size },
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: `Failed to read emails: ${error instanceof Error ? error.message : String(error)}` }],
-          details: { error: true },
-        };
-      }
-    },
-  };
-}
-
 // ============================================================================
-// LIST THREADS — root sees all, child filtered
+// LIST THREADS — children also see the unfiltered list now.
 // ============================================================================
 
 export function createListThreadsTool(agentEmail: string): AgentTool {
@@ -887,44 +800,3 @@ export function createListThreadsTool(agentEmail: string): AgentTool {
   };
 }
 
-export function createFilteredListThreadsTool(agentEmail: string, tag: string): AgentTool {
-  const inboxId = agentEmail;
-  const taggedEmail = addTag(agentEmail, tag).toLowerCase();
-
-  return {
-    name: "list_threads",
-    label: "List Threads",
-    description: "List email threads for this task.",
-    parameters: Type.Object({
-      limit: Type.Optional(Type.Number({ description: "Max threads to return (default 10)" })),
-    }),
-    execute: async (_toolCallId, params) => {
-      try {
-        const p = params as { limit?: number };
-        const agentmail = getAgentMailClient();
-        const response = await agentmail.inboxes.threads.list(inboxId, { limit: 50 }) as Record<string, unknown>;
-        const threads = (response.threads ?? response.data ?? []) as Record<string, unknown>[];
-
-        const filtered = threads.filter((t) => {
-          const recipients = (t.recipients as string[] ?? []).map((r: string) => r.toLowerCase());
-          const senders = (t.senders as string[] ?? []).map((s: string) => s.toLowerCase());
-          return [...recipients, ...senders].some((addr) => addr.includes(taggedEmail));
-        }).slice(0, p.limit ?? 10);
-
-        const formatted = filtered
-          .map((t) =>
-            `Thread: ${t.threadId ?? t.thread_id}\nSubject: ${t.subject ?? "(no subject)"}\nSenders: ${JSON.stringify(t.senders)}\nRecipients: ${JSON.stringify(t.recipients)}\nMessages: ${t.messageCount ?? t.message_count ?? 0}\nUpdated: ${t.updatedAt ?? t.updated_at ?? "unknown"}`)
-          .join("\n---\n");
-        return {
-          content: [{ type: "text" as const, text: formatted || "No threads found for this task." }],
-          details: { count: filtered.length },
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text" as const, text: `Failed to list threads: ${error instanceof Error ? error.message : String(error)}` }],
-          details: { error: true },
-        };
-      }
-    },
-  };
-}

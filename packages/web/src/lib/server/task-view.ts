@@ -7,6 +7,8 @@ type TaskRecord = {
   taskId: string;
   agentId: string;
   tag: string;
+  slug: string | null;
+  agentmailThreadIds: string[];
   isRoot: boolean;
   objective: string;
   status: string;
@@ -68,6 +70,8 @@ function serializeTaskBase(
     taskId: task.taskId,
     agentId: task.agentId,
     tag: task.tag,
+    slug: task.slug,
+    agentmailThreadCount: task.agentmailThreadIds?.length ?? 0,
     isRoot: task.isRoot,
     objective: task.objective,
     status: task.status,

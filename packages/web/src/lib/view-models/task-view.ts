@@ -12,6 +12,8 @@ export type TaskSummaryView = {
   taskId: string;
   agentId: string;
   tag: string;
+  slug: string | null;
+  agentmailThreadCount: number;
   isRoot: boolean;
   objective: string;
   status: string;

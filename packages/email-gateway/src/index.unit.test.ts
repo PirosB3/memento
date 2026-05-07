@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findFirstMock } = vi.hoisted(() => ({ findFirstMock: vi.fn() }));
+const { emailContactFindFirstMock, taskFindFirstMock, findTaskByAgentmailThreadIdMock } = vi.hoisted(() => ({
+  emailContactFindFirstMock: vi.fn(),
+  taskFindFirstMock: vi.fn(),
+  findTaskByAgentmailThreadIdMock: vi.fn(),
+}));
 
 vi.mock("@summon/shared", () => ({
   prisma: {
     emailContact: {
-      findFirst: findFirstMock,
+      findFirst: emailContactFindFirstMock,
+    },
+    task: {
+      findFirst: taskFindFirstMock,
     },
   },
   createLogger: () => ({
@@ -17,6 +24,7 @@ vi.mock("@summon/shared", () => ({
   getTemporalAddress: () => "localhost:7233",
   SIGNAL_EMAIL: "on_email",
   SIGNAL_OWNER: "on_owner_response",
+  findTaskByAgentmailThreadId: findTaskByAgentmailThreadIdMock,
 }));
 
 import {
@@ -24,33 +32,114 @@ import {
   extractBareAddress,
   isKnownContact,
   isSelfSentEmail,
-  parseTag,
+  resolveTargetWorkflow,
 } from "./index";
 
 beforeEach(() => {
-  findFirstMock.mockReset();
+  emailContactFindFirstMock.mockReset();
+  taskFindFirstMock.mockReset();
+  findTaskByAgentmailThreadIdMock.mockReset();
 });
 
 describe("email gateway helpers", () => {
-  it("parses a task tag from tagged recipient addresses", () => {
-    const tag = parseTag(
-      [
-        "Avery <avery+abc123@agentmail.test>",
-        "other@example.com",
-      ],
-      "avery@agentmail.test",
-    );
-
-    expect(tag).toBe("abc123");
-  });
-
-  it("returns null when no tagged recipient is present", () => {
-    expect(parseTag(["owner@example.com"], "avery@agentmail.test")).toBeNull();
-  });
-
   it("detects self-sent messages by local part", () => {
     expect(isSelfSentEmail("Avery <avery@agentmail.test>", "avery@agentmail.test")).toBe(true);
     expect(isSelfSentEmail("Owner <owner@example.com>", "avery@agentmail.test")).toBe(false);
+  });
+});
+
+describe("resolveTargetWorkflow", () => {
+  function makeTemporal(running: Record<string, boolean>) {
+    return {
+      workflow: {
+        getHandle: (workflowId: string) => ({
+          describe: async () => ({
+            status: { name: running[workflowId] ? "RUNNING" : "COMPLETED" },
+          }),
+        }),
+      },
+    } as unknown as Parameters<typeof resolveTargetWorkflow>[0];
+  }
+
+  const agent = { agentId: "agent-1", agentEmail: "avery@agentmail.test" };
+
+  it("routes to a child task when the AgentMail threadId matches a tasks row", async () => {
+    findTaskByAgentmailThreadIdMock.mockResolvedValueOnce({ taskId: "task-x" });
+    const temporal = makeTemporal({ "task-task-x": true });
+
+    const result = await resolveTargetWorkflow(temporal, agent, {
+      messageId: "m1",
+      timestamp: "2026-05-07T00:00:00Z",
+      senderEmail: "ryan@example.com",
+      isOwner: false,
+      agentmailThreadId: "thread-AAA",
+    });
+
+    expect(result).toEqual({ workflowId: "task-task-x" });
+    expect(findTaskByAgentmailThreadIdMock).toHaveBeenCalledWith(expect.anything(), {
+      agentId: "agent-1",
+      agentmailThreadId: "thread-AAA",
+    });
+  });
+
+  it("routes to root when the threadId is not bound to any task", async () => {
+    findTaskByAgentmailThreadIdMock.mockResolvedValueOnce(null);
+    const temporal = makeTemporal({ "agent__agent-1__root": true });
+
+    const result = await resolveTargetWorkflow(temporal, agent, {
+      messageId: "m2",
+      timestamp: "2026-05-07T00:00:00Z",
+      senderEmail: "ryan@example.com",
+      isOwner: false,
+      agentmailThreadId: "thread-unmatched",
+    });
+
+    expect(result).toEqual({ workflowId: "agent__agent-1__root" });
+  });
+
+  it("routes to root when the message has no threadId at all", async () => {
+    const temporal = makeTemporal({ "agent__agent-1__root": true });
+
+    const result = await resolveTargetWorkflow(temporal, agent, {
+      messageId: "m3",
+      timestamp: "2026-05-07T00:00:00Z",
+      senderEmail: "ryan@example.com",
+      isOwner: false,
+      agentmailThreadId: null,
+    });
+
+    expect(result).toEqual({ workflowId: "agent__agent-1__root" });
+    expect(findTaskByAgentmailThreadIdMock).not.toHaveBeenCalled();
+  });
+
+  it("defers when the matched child workflow is stopped", async () => {
+    findTaskByAgentmailThreadIdMock.mockResolvedValueOnce({ taskId: "task-y" });
+    const temporal = makeTemporal({ "task-task-y": false });
+
+    const result = await resolveTargetWorkflow(temporal, agent, {
+      messageId: "m4",
+      timestamp: "2026-05-07T00:00:00Z",
+      senderEmail: "ryan@example.com",
+      isOwner: false,
+      agentmailThreadId: "thread-Y",
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("defers when no task matches and the root workflow is stopped", async () => {
+    findTaskByAgentmailThreadIdMock.mockResolvedValueOnce(null);
+    const temporal = makeTemporal({ "agent__agent-1__root": false });
+
+    const result = await resolveTargetWorkflow(temporal, agent, {
+      messageId: "m5",
+      timestamp: "2026-05-07T00:00:00Z",
+      senderEmail: "ryan@example.com",
+      isOwner: false,
+      agentmailThreadId: "thread-Z",
+    });
+
+    expect(result).toBeNull();
   });
 });
 
@@ -184,24 +273,24 @@ describe("collectOutboundRecipients", () => {
 
 describe("isKnownContact", () => {
   it("returns true when a matching row exists", async () => {
-    findFirstMock.mockResolvedValueOnce({ id: 42 });
+    emailContactFindFirstMock.mockResolvedValueOnce({ id: 42 });
 
     const result = await isKnownContact("avery@agentmail.test", "Ryan@Example.COM");
 
     expect(result).toBe(true);
-    expect(findFirstMock).toHaveBeenCalledWith({
+    expect(emailContactFindFirstMock).toHaveBeenCalledWith({
       where: { inboxId: "avery@agentmail.test", emailAddress: "ryan@example.com" },
       select: { id: true },
     });
   });
 
   it("returns false when no matching row exists", async () => {
-    findFirstMock.mockResolvedValueOnce(null);
+    emailContactFindFirstMock.mockResolvedValueOnce(null);
 
     const result = await isKnownContact("avery@agentmail.test", "stranger@example.com");
 
     expect(result).toBe(false);
-    expect(findFirstMock).toHaveBeenCalledOnce();
+    expect(emailContactFindFirstMock).toHaveBeenCalledOnce();
   });
 
   it("returns false without touching prisma when the address is empty", async () => {
@@ -210,6 +299,6 @@ describe("isKnownContact", () => {
 
     expect(resultEmpty).toBe(false);
     expect(resultWhitespace).toBe(false);
-    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(emailContactFindFirstMock).not.toHaveBeenCalled();
   });
 });

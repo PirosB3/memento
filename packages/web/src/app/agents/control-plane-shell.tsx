@@ -71,11 +71,9 @@ function formatTs(ts: string): string {
   }
 }
 
-function taskAliasEmail(agentEmail: string, task: TaskSummaryView): string {
+function taskSubtitle(agentEmail: string, task: TaskSummaryView): string {
   if (task.isRoot) return agentEmail;
-  const [local, domain] = agentEmail.split("@");
-  if (!local || !domain) return agentEmail;
-  return `${local}+${task.tag}@${domain}`;
+  return task.slug ?? task.tag;
 }
 
 function taskLabel(task: TaskSummaryView): string {
@@ -579,7 +577,7 @@ function TaskRow({
           {taskLabel(task)}
         </span>
         <span className="block truncate font-mono text-[10px] text-muted-foreground">
-          {taskAliasEmail(agentEmail, task)}
+          {taskSubtitle(agentEmail, task)}
         </span>
       </span>
       {selected ? <StatusPill status={status} /> : null}
@@ -662,7 +660,7 @@ export default function ControlPlaneShell({
     if (!needle || !selectedAgent) return allTasks;
     return allTasks.filter((task) => (
       taskLabel(task).toLowerCase().includes(needle) ||
-      taskAliasEmail(selectedAgent.agentEmail, task).toLowerCase().includes(needle) ||
+      taskSubtitle(selectedAgent.agentEmail, task).toLowerCase().includes(needle) ||
       getDisplayedTaskStatus(task).toLowerCase().includes(needle)
     ));
   }, [allTasks, search, selectedAgent]);
@@ -677,7 +675,7 @@ export default function ControlPlaneShell({
         selectedAgent?.agentId === agent.agentId &&
         allTasks.some((task) => (
           taskLabel(task).toLowerCase().includes(needle) ||
-          taskAliasEmail(selectedAgent.agentEmail, task).toLowerCase().includes(needle) ||
+          taskSubtitle(selectedAgent.agentEmail, task).toLowerCase().includes(needle) ||
           getDisplayedTaskStatus(task).toLowerCase().includes(needle)
         ))
       )

@@ -11,6 +11,9 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("The context seed message contains the stable agent/task snapshot.");
     expect(promptA).toContain("## REPLY CHANNEL");
     expect(promptA).toContain("Match the wake channel");
+    expect(promptA).toContain("## INBOUND EMAIL TRIAGE");
+    expect(promptA).toContain("route_email_to_thread");
+    expect(promptA).toContain("psql $DATABASE_READONLY_URL");
     expect(promptA).not.toContain("Avery");
     expect(promptA).not.toContain("owner@example.com");
     expect(promptA).not.toContain("## AVAILABLE SKILLS");
@@ -28,6 +31,8 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("Never quit work silently.");
     expect(promptA).toContain("## REPLY CHANNEL");
     expect(promptA).toContain("Match the wake channel");
+    expect(promptA).not.toContain("## INBOUND EMAIL TRIAGE");
+    expect(promptA).not.toContain("route_email_to_thread");
     expect(promptA).not.toContain("avery+abc123@agentmail.test");
     expect(promptA).not.toContain("## AVAILABLE SKILLS");
   });

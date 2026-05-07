@@ -1,5 +1,11 @@
 import crypto from "crypto";
-import { SIGNAL_OWNER, publishTurnSnapshot, createLogger } from "@summon/shared";
+import {
+  SIGNAL_OWNER,
+  publishTurnSnapshot,
+  createLogger,
+  generateTaskSlug,
+  ensureUniqueSlug,
+} from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 
 const log = createLogger("web:task-services");
@@ -21,6 +27,8 @@ export interface PrepareTaskInput {
 
 export interface CreateTaskInput extends PrepareTaskInput {
   answers?: Record<string, string>;
+  seedThreadId?: string;
+  attachThreadId?: string;
 }
 
 export function buildEnrichedObjective(
@@ -112,11 +120,28 @@ export async function createTask(
   const taskId = crypto.randomUUID();
   const objective = buildEnrichedObjective(input.objective, input.answers);
 
+  let slug: string;
+  if (input.seedThreadId?.trim()) {
+    slug = input.seedThreadId.trim();
+    const collision = await deps.db.task.findFirst({
+      where: { agentId: input.agentId, slug },
+      select: { taskId: true },
+    });
+    if (collision) {
+      throw new Error(`Slug "${slug}" is already in use by task ${collision.taskId}`);
+    }
+  } else {
+    slug = await ensureUniqueSlug(deps.db, input.agentId, generateTaskSlug(objective, new Date()));
+  }
+  const agentmailThreadIds = input.attachThreadId?.trim() ? [input.attachThreadId.trim()] : [];
+
   const task = await deps.db.task.create({
     data: {
       taskId,
       agentId: input.agentId,
       tag: taskId,
+      slug,
+      agentmailThreadIds,
       objective,
       status: "RUNNING",
       isRoot: false,

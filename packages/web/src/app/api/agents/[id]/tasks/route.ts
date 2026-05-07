@@ -27,13 +27,23 @@ export async function POST(
 ) {
   const { id } = await params;
   try {
-    const { objective, answers } = await request.json();
-    const task = await createTask({ agentId: id, objective, answers });
-    log.info(`Task created: ${task.taskId} for agent ${id}`);
+    const { objective, answers, seedThreadId, attachThreadId } = await request.json();
+    const task = await createTask({
+      agentId: id,
+      objective,
+      answers,
+      seedThreadId,
+      attachThreadId,
+    });
+    log.info(`Task created: ${task.taskId} for agent ${id} slug=${task.slug ?? "(generated)"}`);
     return Response.json(task, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to create task";
-    const status = message === "Agent not found" ? 404 : 400;
+    const status = message === "Agent not found"
+      ? 404
+      : message.startsWith("Slug ")
+        ? 409
+        : 400;
     return Response.json({ error: message }, { status });
   }
 }

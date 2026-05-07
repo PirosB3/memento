@@ -136,7 +136,7 @@ describe("control plane view loader", () => {
     expect(view.selectedTask).toEqual(expect.objectContaining({
       key: "task-child",
       title: "Follow up with the venue",
-      email: "avery+child-tag@agentmail.test",
+      email: "avery@agentmail.test",
     }));
     expect(view.selectedTask?.detail.conversations[0]?.id).toBe(2);
   });
