@@ -14,6 +14,9 @@ export async function getAgentView(
     deps.db.task.findMany({
       where: { agentId },
       orderBy: { createdAt: "desc" },
+      include: {
+        _count: { select: { agentmailThreadBindings: true } },
+      },
     }),
   ]);
 
@@ -28,6 +31,7 @@ export async function getAgentView(
     ? await deps.db.task.findUnique({
         where: { taskId: rootTask.taskId },
         include: {
+          _count: { select: { agentmailThreadBindings: true } },
           conversations: { orderBy: { id: "asc" } },
           turnLogs: { orderBy: { turnNumber: "asc" } },
         },

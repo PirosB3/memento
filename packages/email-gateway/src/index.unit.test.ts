@@ -1,10 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { emailContactFindFirstMock, taskFindFirstMock, findTaskByAgentmailThreadIdMock } = vi.hoisted(() => ({
-  emailContactFindFirstMock: vi.fn(),
-  taskFindFirstMock: vi.fn(),
-  findTaskByAgentmailThreadIdMock: vi.fn(),
-}));
+const {
+  emailContactFindFirstMock,
+  taskFindFirstMock,
+  findTaskByAgentmailThreadIdMock,
+  recordTaskThreadIdMock,
+  MockAgentMailThreadBindingConflictError,
+} = vi.hoisted(() => {
+  class MockBindingConflictError extends Error {
+    agentId: string;
+    agentmailThreadId: string;
+    requestedTaskId: string;
+    existingTaskId: string;
+
+    constructor(args: {
+      agentId: string;
+      agentmailThreadId: string;
+      requestedTaskId: string;
+      existingTaskId: string;
+    }) {
+      super("binding conflict");
+      this.agentId = args.agentId;
+      this.agentmailThreadId = args.agentmailThreadId;
+      this.requestedTaskId = args.requestedTaskId;
+      this.existingTaskId = args.existingTaskId;
+    }
+  }
+
+  return {
+    emailContactFindFirstMock: vi.fn(),
+    taskFindFirstMock: vi.fn(),
+    findTaskByAgentmailThreadIdMock: vi.fn(),
+    recordTaskThreadIdMock: vi.fn(),
+    MockAgentMailThreadBindingConflictError: MockBindingConflictError,
+  };
+});
 
 vi.mock("@summon/shared", () => ({
   prisma: {
@@ -25,10 +55,13 @@ vi.mock("@summon/shared", () => ({
   SIGNAL_EMAIL: "on_email",
   SIGNAL_OWNER: "on_owner_response",
   findTaskByAgentmailThreadId: findTaskByAgentmailThreadIdMock,
+  recordTaskThreadId: recordTaskThreadIdMock,
+  AgentMailThreadBindingConflictError: MockAgentMailThreadBindingConflictError,
 }));
 
 import {
   collectOutboundRecipients,
+  extractLegacyTagFromRecipients,
   extractBareAddress,
   isKnownContact,
   isSelfSentEmail,
@@ -39,6 +72,7 @@ beforeEach(() => {
   emailContactFindFirstMock.mockReset();
   taskFindFirstMock.mockReset();
   findTaskByAgentmailThreadIdMock.mockReset();
+  recordTaskThreadIdMock.mockReset();
 });
 
 describe("email gateway helpers", () => {
@@ -63,7 +97,7 @@ describe("resolveTargetWorkflow", () => {
 
   const agent = { agentId: "agent-1", agentEmail: "avery@agentmail.test" };
 
-  it("routes to a child task when the AgentMail threadId matches a tasks row", async () => {
+  it("routes to a child task when the AgentMail threadId matches a bridge binding", async () => {
     findTaskByAgentmailThreadIdMock.mockResolvedValueOnce({ taskId: "task-x" });
     const temporal = makeTemporal({ "task-task-x": true });
 
@@ -73,6 +107,7 @@ describe("resolveTargetWorkflow", () => {
       senderEmail: "ryan@example.com",
       isOwner: false,
       agentmailThreadId: "thread-AAA",
+      legacyTag: null,
     });
 
     expect(result).toEqual({ workflowId: "task-task-x" });
@@ -92,6 +127,7 @@ describe("resolveTargetWorkflow", () => {
       senderEmail: "ryan@example.com",
       isOwner: false,
       agentmailThreadId: "thread-unmatched",
+      legacyTag: null,
     });
 
     expect(result).toEqual({ workflowId: "agent__agent-1__root" });
@@ -106,6 +142,7 @@ describe("resolveTargetWorkflow", () => {
       senderEmail: "ryan@example.com",
       isOwner: false,
       agentmailThreadId: null,
+      legacyTag: null,
     });
 
     expect(result).toEqual({ workflowId: "agent__agent-1__root" });
@@ -122,6 +159,7 @@ describe("resolveTargetWorkflow", () => {
       senderEmail: "ryan@example.com",
       isOwner: false,
       agentmailThreadId: "thread-Y",
+      legacyTag: null,
     });
 
     expect(result).toBeNull();
@@ -137,9 +175,76 @@ describe("resolveTargetWorkflow", () => {
       senderEmail: "ryan@example.com",
       isOwner: false,
       agentmailThreadId: "thread-Z",
+      legacyTag: null,
     });
 
     expect(result).toBeNull();
+  });
+
+  it("uses the legacy +tag fallback during cutover and records the bridge binding", async () => {
+    findTaskByAgentmailThreadIdMock.mockResolvedValueOnce(null);
+    taskFindFirstMock.mockResolvedValueOnce({ taskId: "task-legacy" });
+    recordTaskThreadIdMock.mockResolvedValueOnce(undefined);
+    const temporal = makeTemporal({ "task-task-legacy": true });
+
+    const result = await resolveTargetWorkflow(temporal, agent, {
+      messageId: "m6",
+      timestamp: "2026-05-07T00:00:00Z",
+      senderEmail: "ryan@example.com",
+      isOwner: false,
+      agentmailThreadId: "thread-legacy",
+      legacyTag: "legacy-tag",
+    });
+
+    expect(result).toEqual({ workflowId: "task-task-legacy" });
+    expect(taskFindFirstMock).toHaveBeenCalledWith({
+      where: { agentId: "agent-1", tag: "legacy-tag", isRoot: false },
+      select: { taskId: true },
+    });
+    expect(recordTaskThreadIdMock).toHaveBeenCalledWith(expect.anything(), {
+      agentId: "agent-1",
+      taskId: "task-legacy",
+      agentmailThreadId: "thread-legacy",
+    });
+  });
+
+  it("does not route a legacy +tag fallback when bridge binding creation conflicts", async () => {
+    findTaskByAgentmailThreadIdMock.mockResolvedValueOnce(null);
+    taskFindFirstMock.mockResolvedValueOnce({ taskId: "task-legacy" });
+    recordTaskThreadIdMock.mockRejectedValueOnce(new MockAgentMailThreadBindingConflictError({
+      agentId: "agent-1",
+      agentmailThreadId: "thread-legacy",
+      requestedTaskId: "task-legacy",
+      existingTaskId: "task-other",
+    }));
+    const temporal = makeTemporal({ "task-task-legacy": true });
+
+    const result = await resolveTargetWorkflow(temporal, agent, {
+      messageId: "m7",
+      timestamp: "2026-05-07T00:00:00Z",
+      senderEmail: "ryan@example.com",
+      isOwner: false,
+      agentmailThreadId: "thread-legacy",
+      legacyTag: "legacy-tag",
+    });
+
+    expect(result).toBeNull();
+  });
+});
+
+describe("extractLegacyTagFromRecipients", () => {
+  it("extracts a legacy +tag from to/cc recipients for the same inbox", () => {
+    expect(extractLegacyTagFromRecipients({
+      to: ["Avery <avery@agentmail.test>"],
+      cc: ["avery+task-123@agentmail.test"],
+    }, "avery@agentmail.test")).toBe("task-123");
+  });
+
+  it("ignores plus-addresses for other domains or local parts", () => {
+    expect(extractLegacyTagFromRecipients({
+      to: ["avery+task-123@example.com", "other+task-123@agentmail.test"],
+      cc: [],
+    }, "avery@agentmail.test")).toBeNull();
   });
 });
 

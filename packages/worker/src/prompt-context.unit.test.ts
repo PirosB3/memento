@@ -25,7 +25,6 @@ function buildTaskRecord(input: { isRoot: boolean; tag: string; objective: strin
     taskId: "task-1",
     agentId: "agent-1",
     slug: null,
-    agentmailThreadIds: [],
     status: "RUNNING",
     parentTaskId: null,
     temporalRunId: "run-1",

@@ -14,6 +14,8 @@ import {
   createLogger,
   getTemporalAddress,
   findTaskByAgentmailThreadId,
+  recordTaskThreadId,
+  AgentMailThreadBindingConflictError,
 } from "@summon/shared";
 import type { InboundEmail } from "@summon/shared";
 
@@ -30,6 +32,7 @@ interface PendingInboundMessage {
   senderEmail: string;
   isOwner: boolean;
   agentmailThreadId: string | null;
+  legacyTag: string | null;
 }
 
 /**
@@ -260,6 +263,7 @@ async function collectPendingMessages(
       senderEmail,
       isOwner: senderEmail === agent.ownerEmail.toLowerCase(),
       agentmailThreadId,
+      legacyTag: extractLegacyTagFromRecipients(msg, agent.agentEmail),
     });
   }
 
@@ -270,6 +274,37 @@ function coerceAddressList(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === "string") return [raw];
   return [];
+}
+
+export function extractLegacyTagFromRecipients(
+  msg: Record<string, unknown>,
+  agentEmail: string,
+): string | null {
+  const atIndex = agentEmail.lastIndexOf("@");
+  if (atIndex < 1) return null;
+
+  const baseLocal = agentEmail.slice(0, atIndex).toLowerCase();
+  const domain = agentEmail.slice(atIndex + 1).toLowerCase();
+  const legacyPrefix = `${baseLocal}+`;
+  const candidates = [
+    ...coerceAddressList(msg.to),
+    ...coerceAddressList(msg.cc),
+  ];
+
+  for (const candidate of candidates) {
+    const address = extractBareAddress(candidate);
+    const candidateAtIndex = address.lastIndexOf("@");
+    if (candidateAtIndex < 1) continue;
+
+    const local = address.slice(0, candidateAtIndex);
+    const candidateDomain = address.slice(candidateAtIndex + 1);
+    if (candidateDomain !== domain || !local.startsWith(legacyPrefix)) continue;
+
+    const tag = local.slice(legacyPrefix.length);
+    if (tag) return tag;
+  }
+
+  return null;
 }
 
 /**
@@ -355,8 +390,10 @@ async function deliverMessages(
 
 /**
  * Decide which workflow should receive a given message. Rules:
- *   - inbound AgentMail threadId matches a task's `agentmail_thread_ids` →
+ *   - inbound AgentMail threadId matches an `agentmail_thread_bindings` row →
  *     that task's workflow
+ *   - temporary cutover fallback: unmatched legacy `+tag` recipients lazily
+ *     create a bridge binding and route to that child
  *   - no match → root workflow
  * Returns `null` if the chosen workflow isn't running; the gateway will defer
  * the message (leave it unprocessed) and retry on the next poll.
@@ -380,6 +417,38 @@ export async function resolveTargetWorkflow(
         return null;
       }
       return { workflowId };
+    }
+    if (msg.legacyTag) {
+      const legacyTask = await prisma.task.findFirst({
+        where: { agentId: agent.agentId, tag: msg.legacyTag, isRoot: false },
+        select: { taskId: true },
+      });
+      if (legacyTask) {
+        try {
+          await recordTaskThreadId(prisma, {
+            agentId: agent.agentId,
+            taskId: legacyTask.taskId,
+            agentmailThreadId: msg.agentmailThreadId,
+          });
+        } catch (err) {
+          if (err instanceof AgentMailThreadBindingConflictError) {
+            log.warn(
+              `  → Legacy +tag fallback conflict for AgentMail thread "${msg.agentmailThreadId}": already bound to task ${err.existingTaskId}`,
+            );
+            return null;
+          }
+          throw err;
+        }
+
+        const workflowId = `task-${legacyTask.taskId}`;
+        if (!(await isWorkflowRunning(temporal, workflowId))) {
+          log.info(`  → Deferring legacy-tag email for stopped task ${legacyTask.taskId} (will retry on restart)`);
+          return null;
+        }
+        log.info(`  → Routed legacy +tag "${msg.legacyTag}" by creating AgentMail thread binding for task ${legacyTask.taskId}`);
+        return { workflowId };
+      }
+      log.info(`  → Legacy +tag "${msg.legacyTag}" did not match a child task for agent ${agent.agentId}`);
     }
     log.info(`  → No task bound to AgentMail thread "${msg.agentmailThreadId}", routing to root for agent ${agent.agentId}`);
   }

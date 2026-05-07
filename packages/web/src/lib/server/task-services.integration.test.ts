@@ -87,6 +87,71 @@ describe("task services", () => {
     );
   });
 
+  it("creates an initial AgentMail thread binding when attachThreadId is provided", async () => {
+    const workflows = {
+      startTaskWorkflow: vi.fn().mockResolvedValue({ firstExecutionRunId: "run-1" }),
+      terminateWorkflow: vi.fn(),
+      describeWorkflow: vi.fn().mockResolvedValue({
+        runId: "run-root",
+        status: { name: "RUNNING" },
+        memo: {},
+      }),
+      queryWorkflow: vi.fn().mockResolvedValue({
+        schemaVersion: 1,
+        taskId: "task-root",
+        agentId: "agent-1",
+        isRoot: true,
+        phase: "SLEEPING",
+        logicalStatus: "SLEEPING",
+        turnNumber: 1,
+        lastStopReason: "Waiting",
+        nextWakeAt: null,
+        pendingEmailCount: 0,
+        pendingOwnerCount: 0,
+        pendingScheduleCount: 0,
+      }),
+      startScheduleWorkflow: vi.fn(),
+    };
+    const deps = createMockWebDeps({ workflows });
+    const db = deps.db as unknown as {
+      agent: { findUnique: ReturnType<typeof vi.fn> };
+      task: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
+      agentMailThreadBinding: { findUnique: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
+    };
+
+    db.agent.findUnique.mockResolvedValue(buildAgentRecord());
+    db.task.findFirst.mockImplementation(async (args: { where?: Record<string, unknown> }) => {
+      if (args?.where && "slug" in args.where) return null;
+      return buildTaskRecord({ isRoot: true, taskId: "task-root" });
+    });
+    db.task.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) =>
+      buildTaskRecord({ ...data, isRoot: false, tag: data.taskId }),
+    );
+    db.agentMailThreadBinding.findUnique.mockResolvedValue(null);
+    db.agentMailThreadBinding.create.mockResolvedValue(undefined);
+
+    const task = await createTask(
+      {
+        agentId: "agent-1",
+        objective: "Follow up with Alice",
+        attachThreadId: "thread-AAA",
+      },
+      deps,
+    );
+
+    expect(db.task.create.mock.calls[0][0].data).not.toHaveProperty("agentmailThreadIds");
+    expect(db.agentMailThreadBinding.create).toHaveBeenCalledWith({
+      data: {
+        agentId: "agent-1",
+        taskId: task.taskId,
+        agentmailThreadId: "thread-AAA",
+      },
+    });
+    expect(workflows.startTaskWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.taskId }),
+    );
+  });
+
   it("prepares questions for an existing agent", async () => {
     const llm = {
       createText: vi.fn().mockResolvedValue('["Who is involved?","What is the deadline?"]'),

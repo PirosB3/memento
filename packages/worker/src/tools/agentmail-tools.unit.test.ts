@@ -312,6 +312,38 @@ describe("agentmail tools", () => {
     );
   });
 
+  it("manually reconstructs reply-all recipients when explicit cc is present", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    client.inboxes.messages.get.mockResolvedValue({
+      from: "Sender Example <sender@example.com>",
+      to: ["Avery <avery@agentmail.test>", "Other Example <other@example.org>"],
+      cc: ["Existing Example <existing@example.net>"],
+    });
+    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply", threadId: "thread-reply" });
+
+    const tool = createReplyEmailTool("avery@agentmail.test", agentDir);
+    await tool.execute("call-reply-all-cc", {
+      messageId: "orig-msg",
+      body: "Reply body",
+      replyAll: true,
+      cc: ["Owner Example <owner@example.com>"],
+    });
+
+    expect(client.inboxes.messages.get).toHaveBeenCalledWith("avery@agentmail.test", "orig-msg");
+    expect(client.inboxes.messages.reply).toHaveBeenCalledWith(
+      "avery@agentmail.test",
+      "orig-msg",
+      expect.objectContaining({
+        text: "Reply body",
+        to: ["sender@example.com"],
+        cc: ["other@example.org", "existing@example.net", "owner@example.com"],
+      }),
+    );
+    const [, , replyParams] = client.inboxes.messages.reply.mock.calls[0];
+    expect(replyParams).not.toHaveProperty("replyAll");
+  });
+
   it("invokes the threadIdHook on a successful reply", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();

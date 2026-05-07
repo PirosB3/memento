@@ -109,7 +109,7 @@ export function setAgentMailClientForTests(client: AgentMailLike | null): void {
 /**
  * Optional callback invoked after a successful send/reply with the AgentMail
  * threadId from the response. The caller (pi-turn) uses it to record the
- * threadId on the task row so future inbound mail in this thread routes
+ * threadId in the bridge table so future inbound mail in this thread routes
  * directly to the task.
  */
 export type ThreadIdHook = (agentmailThreadId: string) => Promise<void> | void;
@@ -144,6 +144,12 @@ function normalizeAddressList(value: string | string[] | undefined): string[] {
   return normalized;
 }
 
+function coerceAddressList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string") return [value];
+  return [];
+}
+
 function normalizeSenderEmail(rawFrom: unknown): string | null {
   if (typeof rawFrom !== "string") {
     return null;
@@ -160,6 +166,51 @@ function normalizeSenderEmail(rawFrom: unknown): string | null {
 
   const normalized = extracted.trim().toLowerCase();
   return normalized || null;
+}
+
+function pushUniqueAddress(target: string[], seen: Set<string>, raw: unknown, agentEmail: string): void {
+  if (typeof raw !== "string") return;
+  const normalized = normalizeSenderEmail(raw);
+  if (!normalized || normalized === agentEmail.trim().toLowerCase() || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  target.push(normalized);
+}
+
+function applyManualReplyAllRecipients(
+  payload: OutgoingEmailInput,
+  originalMessage: Record<string, unknown>,
+  agentEmail: string,
+  explicitCc: string[],
+): void {
+  delete payload.replyAll;
+
+  const to: string[] = [];
+  const cc: string[] = [];
+  const seen = new Set<string>();
+
+  pushUniqueAddress(to, seen, originalMessage.from, agentEmail);
+  for (const recipient of coerceAddressList(originalMessage.to)) {
+    pushUniqueAddress(cc, seen, recipient, agentEmail);
+  }
+  for (const recipient of coerceAddressList(originalMessage.cc)) {
+    pushUniqueAddress(cc, seen, recipient, agentEmail);
+  }
+  for (const recipient of explicitCc) {
+    pushUniqueAddress(cc, seen, recipient, agentEmail);
+  }
+
+  if (to.length === 0 && cc.length > 0) {
+    to.push(cc.shift()!);
+  }
+  if (to.length > 0) {
+    payload.to = to;
+  }
+  payload.cc = cc;
+  if (!payload.cc.length) {
+    delete payload.cc;
+  }
 }
 
 function isWithinDir(rootDir: string, targetPath: string): boolean {
@@ -523,6 +574,11 @@ export function createReplyEmailTool(
         const agentmail = getAgentMailClient();
 
         const replyParams = buildEmailPayload(p, { mode: "reply", agentDir, signature });
+        const explicitCc = normalizeAddressList(p.cc);
+        if (p.replyAll && explicitCc.length > 0) {
+          const originalMessage = await agentmail.inboxes.messages.get(inboxId, p.messageId) as Record<string, unknown>;
+          applyManualReplyAllRecipients(replyParams, originalMessage, agentEmail, explicitCc);
+        }
 
         const result = await agentmail.inboxes.messages.reply(inboxId, p.messageId, replyParams) as Record<string, unknown>;
         const messageId = (result.messageId ?? result.message_id) as string | undefined;
@@ -799,4 +855,3 @@ export function createListThreadsTool(agentEmail: string): AgentTool {
     },
   };
 }
-

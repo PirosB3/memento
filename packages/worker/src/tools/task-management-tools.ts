@@ -7,6 +7,7 @@ import {
   publishTurnSnapshot,
   generateTaskSlug,
   ensureUniqueSlug,
+  recordTaskThreadId,
 } from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 import type { AgentTool } from "../../pi-types.js";
@@ -66,21 +67,25 @@ export function createSpawnTaskTool(agentId: string, _agentEmail: string): Agent
           slug = await ensureUniqueSlug(prisma, agentId, generateTaskSlug(objective, now));
         }
 
-        const agentmailThreadIds = p.attach_threadId?.trim() ? [p.attach_threadId.trim()] : [];
+        const agentmailThreadId = p.attach_threadId?.trim() || null;
 
         log.info(`Spawning task: ${taskId} agent=${agentId} slug=${slug}`, { objective });
 
-        await prisma.task.create({
-          data: {
-            taskId,
-            agentId,
-            tag,
-            slug,
-            agentmailThreadIds,
-            objective,
-            status: "RUNNING",
-            isRoot: false,
-          },
+        await prisma.$transaction(async (tx) => {
+          await tx.task.create({
+            data: {
+              taskId,
+              agentId,
+              tag,
+              slug,
+              objective,
+              status: "RUNNING",
+              isRoot: false,
+            },
+          });
+          if (agentmailThreadId) {
+            await recordTaskThreadId(tx, { agentId, taskId, agentmailThreadId });
+          }
         });
 
         const temporal = await getTemporalClient();
@@ -95,9 +100,9 @@ export function createSpawnTaskTool(agentId: string, _agentEmail: string): Agent
         return {
           content: [{
             type: "text" as const,
-            text: `Child task created!\nTask ID: ${taskId}\nSlug: ${slug}\nObjective: ${objective}\n${agentmailThreadIds.length ? `Bound AgentMail threads: ${agentmailThreadIds.join(", ")}\n` : ""}\nThe task is now running independently.`,
+            text: `Child task created!\nTask ID: ${taskId}\nSlug: ${slug}\nObjective: ${objective}\n${agentmailThreadId ? `Bound AgentMail thread: ${agentmailThreadId}\n` : ""}\nThe task is now running independently.`,
           }],
-          details: { taskId, tag, slug, objective, agentmailThreadIds },
+          details: { taskId, tag, slug, objective, agentmailThreadId },
         };
       } catch (error) {
         log.error("Failed to spawn task", error);
@@ -219,6 +224,9 @@ export function createListTasksTool(agentId: string): AgentTool {
         const tasks = await prisma.task.findMany({
           where: { agentId, isRoot: false },
           orderBy: { createdAt: "desc" },
+          include: {
+            _count: { select: { agentmailThreadBindings: true } },
+          },
         });
 
         const results = [];
@@ -231,7 +239,7 @@ export function createListTasksTool(agentId: string): AgentTool {
             taskId: t.taskId,
             tag: t.tag,
             slug: t.slug,
-            agentmailThreadCount: t.agentmailThreadIds.length,
+            agentmailThreadCount: t._count.agentmailThreadBindings,
             objective: t.objective,
             status: t.status,
             lastStopReason: lastLog?.stopReason ?? null,

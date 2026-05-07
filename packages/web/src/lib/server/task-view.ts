@@ -8,7 +8,7 @@ type TaskRecord = {
   agentId: string;
   tag: string;
   slug: string | null;
-  agentmailThreadIds: string[];
+  _count?: { agentmailThreadBindings?: number };
   isRoot: boolean;
   objective: string;
   status: string;
@@ -71,7 +71,7 @@ function serializeTaskBase(
     agentId: task.agentId,
     tag: task.tag,
     slug: task.slug,
-    agentmailThreadCount: task.agentmailThreadIds?.length ?? 0,
+    agentmailThreadCount: task._count?.agentmailThreadBindings ?? 0,
     isRoot: task.isRoot,
     objective: task.objective,
     status: task.status,
@@ -124,6 +124,7 @@ export async function getTaskView(
   const task = await deps.db.task.findUnique({
     where: { taskId },
     include: {
+      _count: { select: { agentmailThreadBindings: true } },
       conversations: { orderBy: { id: "asc" } },
       turnLogs: { orderBy: { turnNumber: "asc" } },
       agent: {

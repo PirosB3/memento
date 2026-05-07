@@ -28,21 +28,20 @@ model Agent {
 }
 
 model Task {
-  taskId             String    @id @map("task_id")
-  agentId            String    @map("agent_id")
-  tag                String    @unique
-  slug               String?
-  agentmailThreadIds String[]  @default([]) @map("agentmail_thread_ids")
-  objective          String
-  status             String    @default("RUNNING")
-  isRoot             Boolean   @default(false) @map("is_root")
-  parentTaskId       String?   @map("parent_task_id")
-  temporalRunId      String?   @map("temporal_run_id")
-  maxTurns           Int       @default(20) @map("max_turns")
-  timeoutHours       Int       @default(72) @map("timeout_hours")
-  lastActivityAt     DateTime  @default(now()) @map("last_activity_at")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  completedAt        DateTime? @map("completed_at")
+  taskId         String    @id @map("task_id")
+  agentId        String    @map("agent_id")
+  tag            String    @unique
+  slug           String?
+  objective      String
+  status         String    @default("RUNNING")
+  isRoot         Boolean   @default(false) @map("is_root")
+  parentTaskId   String?   @map("parent_task_id")
+  temporalRunId  String?   @map("temporal_run_id")
+  maxTurns       Int       @default(20) @map("max_turns")
+  timeoutHours   Int       @default(72) @map("timeout_hours")
+  lastActivityAt DateTime  @default(now()) @map("last_activity_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  completedAt    DateTime? @map("completed_at")
 
   compactedSummary   String? @map("compacted_summary")
   compactedPrefix    Json?   @map("compacted_prefix")
@@ -52,15 +51,30 @@ model Task {
   parentTask Task?  @relation("TaskSubtasks", fields: [parentTaskId], references: [taskId])
   subtasks   Task[] @relation("TaskSubtasks")
 
-  conversations Conversation[]
-  turnLogs      AgentTurnLog[]
-  schedules     Schedule[]
-  turnSnapshot  TurnSnapshot?
+  conversations           Conversation[]
+  turnLogs                AgentTurnLog[]
+  schedules               Schedule[]
+  turnSnapshot            TurnSnapshot?
+  agentmailThreadBindings AgentMailThreadBinding[]
 
+  @@unique([taskId, agentId])
   @@unique([agentId, slug])
   @@index([agentId])
   @@index([tag])
   @@map("tasks")
+}
+
+model AgentMailThreadBinding {
+  agentId           String   @map("agent_id")
+  taskId            String   @map("task_id")
+  agentmailThreadId String   @map("agentmail_thread_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  task Task @relation(fields: [taskId, agentId], references: [taskId, agentId], onDelete: Cascade)
+
+  @@id([agentId, agentmailThreadId])
+  @@index([taskId])
+  @@map("agentmail_thread_bindings")
 }
 
 model Conversation {

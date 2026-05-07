@@ -9,6 +9,7 @@ export { buildHtmlSignature, buildTextSignature } from "./signature";
 export type { AgentSignature } from "./signature";
 export { generateTaskSlug, ensureUniqueSlug } from "./slug";
 export {
+  AgentMailThreadBindingConflictError,
   recordTaskThreadId,
   findTaskByAgentmailThreadId,
   findTaskBySlug,

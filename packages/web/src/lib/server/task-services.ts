@@ -5,6 +5,7 @@ import {
   createLogger,
   generateTaskSlug,
   ensureUniqueSlug,
+  recordTaskThreadId,
 } from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 
@@ -133,19 +134,30 @@ export async function createTask(
   } else {
     slug = await ensureUniqueSlug(deps.db, input.agentId, generateTaskSlug(objective, new Date()));
   }
-  const agentmailThreadIds = input.attachThreadId?.trim() ? [input.attachThreadId.trim()] : [];
+  const agentmailThreadId = input.attachThreadId?.trim() || null;
 
-  const task = await deps.db.task.create({
-    data: {
-      taskId,
-      agentId: input.agentId,
-      tag: taskId,
-      slug,
-      agentmailThreadIds,
-      objective,
-      status: "RUNNING",
-      isRoot: false,
-    },
+  const task = await deps.db.$transaction(async (tx) => {
+    const createdTask = await tx.task.create({
+      data: {
+        taskId,
+        agentId: input.agentId,
+        tag: taskId,
+        slug,
+        objective,
+        status: "RUNNING",
+        isRoot: false,
+      },
+    });
+
+    if (agentmailThreadId) {
+      await recordTaskThreadId(tx, {
+        agentId: input.agentId,
+        taskId,
+        agentmailThreadId,
+      });
+    }
+
+    return createdTask;
   });
 
   try {

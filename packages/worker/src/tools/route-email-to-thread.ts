@@ -5,6 +5,7 @@ import {
   getTemporalAddress,
   publishTurnSnapshot,
   recordTaskThreadId,
+  AgentMailThreadBindingConflictError,
   findTaskBySlug,
   SIGNAL_EMAIL,
   SIGNAL_OWNER,
@@ -49,7 +50,7 @@ function normalizeAddress(raw: string | undefined | null): string {
  * `route_email_to_thread` (root-only) attaches an unmatched inbound email's
  * AgentMail thread to an existing child task. After this:
  *   - the gateway will route future replies in this AgentMail thread to the
- *     child task (via the agentmail_thread_ids array on tasks)
+ *     child task (via the agentmail_thread_bindings bridge table)
  *   - the child task is signalled so it processes this specific message in
  *     its next turn
  *
@@ -103,7 +104,26 @@ export function createRouteEmailToThreadTool(
           };
         }
 
-        await recordTaskThreadId(prisma, { taskId: task.taskId, agentmailThreadId: threadId });
+        try {
+          await recordTaskThreadId(prisma, { agentId, taskId: task.taskId, agentmailThreadId: threadId });
+        } catch (err) {
+          if (err instanceof AgentMailThreadBindingConflictError) {
+            return {
+              content: [{
+                type: "text" as const,
+                text: `AgentMail thread ${threadId} is already routed to task ${err.existingTaskId}; not routing it to ${task.taskId}.`,
+              }],
+              details: {
+                error: true,
+                reason: "THREAD_ALREADY_BOUND",
+                threadId,
+                existingTaskId: err.existingTaskId,
+                requestedTaskId: task.taskId,
+              },
+            };
+          }
+          throw err;
+        }
 
         const senderEmail = normalizeAddress(msg.from as string | undefined);
         const isOwner = senderEmail === ownerEmail.toLowerCase();

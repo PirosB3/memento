@@ -126,13 +126,12 @@ export async function runPiAgentTurnImpl(
 
   // Hook invoked after every successful send/reply: bind the resulting AgentMail
   // threadId to this task so future inbound mail in this thread routes back here.
-  // Root keeps the empty-array invariant (it never owns conversations) — only
-  // children record threadIds.
+  // Root never owns conversation threads — only children record threadIds.
   const threadIdHook = isRoot
     ? undefined
     : async (agentmailThreadId: string) => {
         try {
-          await recordTaskThreadId(prisma, { taskId: task.taskId, agentmailThreadId });
+          await recordTaskThreadId(prisma, { agentId: agent.agentId, taskId: task.taskId, agentmailThreadId });
         } catch (err) {
           taskLog.warn(`recordTaskThreadId failed for thread ${agentmailThreadId}: ${String(err)}`);
         }
@@ -169,7 +168,7 @@ export async function runPiAgentTurnImpl(
       ]
     : [
         // Child: unfiltered email tools, base address. threadIdHook records
-        // the AgentMail threadId of every outbound mail on the task row so
+        // the AgentMail threadId of every outbound mail in the bridge table so
         // inbound replies route back to it.
         createSendEmailTool(agent.agentEmail, agentDir, signature, threadIdHook),
         createReplyEmailTool(agent.agentEmail, agentDir, signature, threadIdHook),

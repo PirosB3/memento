@@ -24,6 +24,11 @@ export function createMockWebDeps(
       findMany: vi.fn(),
       findFirst: vi.fn(),
     },
+    agentMailThreadBinding: {
+      findUnique: vi.fn(),
+      create: vi.fn(),
+      count: vi.fn(),
+    },
     agentTurnLog: {
       findFirst: vi.fn(),
     },
@@ -33,7 +38,11 @@ export function createMockWebDeps(
     conversation: {
       create: vi.fn(),
     },
-  } as unknown as WebServiceDependencies["db"];
+  } as Record<string, unknown> & {
+    $transaction?: <T>(fn: (tx: WebServiceDependencies["db"]) => Promise<T>) => Promise<T>;
+  };
+  db.$transaction = <T>(fn: (tx: WebServiceDependencies["db"]) => Promise<T>) =>
+    fn(db as unknown as WebServiceDependencies["db"]);
 
   return {
     db: {
