@@ -88,7 +88,8 @@ export async function pollAllInboxes(agentmail: AgentMailClient, temporal: Clien
 
   for (const agent of agents) {
     try {
-      if (!(await isWorkflowRunning(temporal, `agent__${agent.agentId}__root`))) {
+      const rootWorkflowRunning = await isWorkflowRunning(temporal, `agent__${agent.agentId}__root`);
+      if (!rootWorkflowRunning) {
         log.info(`  [${agent.agentId}] Skipping inbox poll because root workflow is stopped`);
         continue;
       }
@@ -421,7 +422,8 @@ async function resolveLegacyTaggedWorkflow(
   }
 
   const workflowId = `task-${task.taskId}`;
-  if (!(await isWorkflowRunning(temporal, workflowId))) {
+  const workflowRunning = await isWorkflowRunning(temporal, workflowId);
+  if (!workflowRunning) {
     log.info(`  → Deferring legacy-tag email for stopped task ${task.taskId} (will retry on restart)`);
     return null;
   }
@@ -455,7 +457,8 @@ export async function resolveTargetWorkflow(
     });
     if (match) {
       const workflowId = `task-${match.taskId}`;
-      if (!(await isWorkflowRunning(temporal, workflowId))) {
+      const workflowRunning = await isWorkflowRunning(temporal, workflowId);
+      if (!workflowRunning) {
         log.info(`  → Deferring email for stopped task ${match.taskId} (will retry on restart)`);
         return null;
       }
@@ -468,7 +471,8 @@ export async function resolveTargetWorkflow(
     log.info(`  → No task bound to AgentMail thread "${threadId}", routing to root for agent ${agent.agentId}`);
   }
 
-  if (!(await isWorkflowRunning(temporal, rootWorkflowId))) {
+  const rootWorkflowRunning = await isWorkflowRunning(temporal, rootWorkflowId);
+  if (!rootWorkflowRunning) {
     log.info(`  → Deferring email because root workflow is stopped for agent ${agent.agentId} (will retry on restart)`);
     return null;
   }
