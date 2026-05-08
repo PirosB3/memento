@@ -426,7 +426,6 @@ export async function resolveTargetWorkflow(
       if (legacyTask) {
         try {
           await recordTaskThreadId(prisma, {
-            agentId: agent.agentId,
             taskId: legacyTask.taskId,
             agentmailThreadId: msg.agentmailThreadId,
           });

@@ -8,19 +8,16 @@ const {
   MockAgentMailThreadBindingConflictError,
 } = vi.hoisted(() => {
   class MockBindingConflictError extends Error {
-    agentId: string;
     agentmailThreadId: string;
     requestedTaskId: string;
     existingTaskId: string;
 
     constructor(args: {
-      agentId: string;
       agentmailThreadId: string;
       requestedTaskId: string;
       existingTaskId: string;
     }) {
       super("binding conflict");
-      this.agentId = args.agentId;
       this.agentmailThreadId = args.agentmailThreadId;
       this.requestedTaskId = args.requestedTaskId;
       this.existingTaskId = args.existingTaskId;
@@ -202,7 +199,6 @@ describe("resolveTargetWorkflow", () => {
       select: { taskId: true },
     });
     expect(recordTaskThreadIdMock).toHaveBeenCalledWith(expect.anything(), {
-      agentId: "agent-1",
       taskId: "task-legacy",
       agentmailThreadId: "thread-legacy",
     });
@@ -212,7 +208,6 @@ describe("resolveTargetWorkflow", () => {
     findTaskByAgentmailThreadIdMock.mockResolvedValueOnce(null);
     taskFindFirstMock.mockResolvedValueOnce({ taskId: "task-legacy" });
     recordTaskThreadIdMock.mockRejectedValueOnce(new MockAgentMailThreadBindingConflictError({
-      agentId: "agent-1",
       agentmailThreadId: "thread-legacy",
       requestedTaskId: "task-legacy",
       existingTaskId: "task-other",

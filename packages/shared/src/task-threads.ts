@@ -3,22 +3,19 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 type ThreadBindingDb = PrismaClient | Prisma.TransactionClient;
 
 export class AgentMailThreadBindingConflictError extends Error {
-  readonly agentId: string;
   readonly agentmailThreadId: string;
   readonly requestedTaskId: string;
   readonly existingTaskId: string;
 
   constructor(args: {
-    agentId: string;
     agentmailThreadId: string;
     requestedTaskId: string;
     existingTaskId: string;
   }) {
     super(
-      `AgentMail thread ${args.agentmailThreadId} for agent ${args.agentId} is already bound to task ${args.existingTaskId}; cannot bind it to task ${args.requestedTaskId}.`,
+      `AgentMail thread ${args.agentmailThreadId} is already bound to task ${args.existingTaskId}; cannot bind it to task ${args.requestedTaskId}.`,
     );
     this.name = "AgentMailThreadBindingConflictError";
-    this.agentId = args.agentId;
     this.agentmailThreadId = args.agentmailThreadId;
     this.requestedTaskId = args.requestedTaskId;
     this.existingTaskId = args.existingTaskId;
@@ -26,26 +23,23 @@ export class AgentMailThreadBindingConflictError extends Error {
 }
 
 /**
- * Bind an AgentMail threadId to a task for an agent.
+ * Bind an AgentMail threadId to a task.
  * Idempotent for the same task, but rejects attempts to bind the same
- * AgentMail thread to a different task for the same agent.
+ * AgentMail thread to a different task.
  */
 export async function recordTaskThreadId(
   prisma: ThreadBindingDb,
-  args: { agentId: string; taskId: string; agentmailThreadId: string },
+  args: { taskId: string; agentmailThreadId: string },
 ): Promise<void> {
-  const { agentId, taskId, agentmailThreadId } = args;
+  const { taskId, agentmailThreadId } = args;
   const existing = await prisma.agentMailThreadBinding.findUnique({
-    where: {
-      agentId_agentmailThreadId: { agentId, agentmailThreadId },
-    },
+    where: { agentmailThreadId },
     select: { taskId: true },
   });
 
   if (existing) {
     if (existing.taskId === taskId) return;
     throw new AgentMailThreadBindingConflictError({
-      agentId,
       agentmailThreadId,
       requestedTaskId: taskId,
       existingTaskId: existing.taskId,
@@ -54,19 +48,16 @@ export async function recordTaskThreadId(
 
   try {
     await prisma.agentMailThreadBinding.create({
-      data: { agentId, taskId, agentmailThreadId },
+      data: { taskId, agentmailThreadId },
     });
   } catch (error) {
     const raced = await prisma.agentMailThreadBinding.findUnique({
-      where: {
-        agentId_agentmailThreadId: { agentId, agentmailThreadId },
-      },
+      where: { agentmailThreadId },
       select: { taskId: true },
     });
     if (raced) {
       if (raced.taskId === taskId) return;
       throw new AgentMailThreadBindingConflictError({
-        agentId,
         agentmailThreadId,
         requestedTaskId: taskId,
         existingTaskId: raced.taskId,
@@ -80,12 +71,10 @@ export async function findTaskByAgentmailThreadId(
   prisma: ThreadBindingDb,
   args: { agentId: string; agentmailThreadId: string },
 ): Promise<{ taskId: string } | null> {
-  return prisma.agentMailThreadBinding.findUnique({
+  return prisma.agentMailThreadBinding.findFirst({
     where: {
-      agentId_agentmailThreadId: {
-        agentId: args.agentId,
-        agentmailThreadId: args.agentmailThreadId,
-      },
+      agentmailThreadId: args.agentmailThreadId,
+      task: { agentId: args.agentId },
     },
     select: { taskId: true },
   });

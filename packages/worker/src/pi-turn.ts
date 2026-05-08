@@ -131,7 +131,7 @@ export async function runPiAgentTurnImpl(
     ? undefined
     : async (agentmailThreadId: string) => {
         try {
-          await recordTaskThreadId(prisma, { agentId: agent.agentId, taskId: task.taskId, agentmailThreadId });
+          await recordTaskThreadId(prisma, { taskId: task.taskId, agentmailThreadId });
         } catch (err) {
           taskLog.warn(`recordTaskThreadId failed for thread ${agentmailThreadId}: ${String(err)}`);
         }

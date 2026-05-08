@@ -57,7 +57,6 @@ model Task {
   turnSnapshot            TurnSnapshot?
   agentmailThreadBindings AgentMailThreadBinding[]
 
-  @@unique([taskId, agentId])
   @@unique([agentId, slug])
   @@index([agentId])
   @@index([tag])
@@ -65,14 +64,12 @@ model Task {
 }
 
 model AgentMailThreadBinding {
-  agentId           String   @map("agent_id")
+  agentmailThreadId String   @id @map("agentmail_thread_id")
   taskId            String   @map("task_id")
-  agentmailThreadId String   @map("agentmail_thread_id")
   createdAt         DateTime @default(now()) @map("created_at")
 
-  task Task @relation(fields: [taskId, agentId], references: [taskId, agentId], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
 
-  @@id([agentId, agentmailThreadId])
   @@index([taskId])
   @@map("agentmail_thread_bindings")
 }

@@ -9,6 +9,7 @@ function buildDb(existing: { taskId: string } | null = null) {
   return {
     agentMailThreadBinding: {
       findUnique: vi.fn().mockResolvedValue(existing),
+      findFirst: vi.fn().mockResolvedValue(existing),
       create: vi.fn().mockResolvedValue(undefined),
     },
   };
@@ -19,14 +20,12 @@ describe("task thread bindings", () => {
     const db = buildDb();
 
     await recordTaskThreadId(db as never, {
-      agentId: "agent-1",
       taskId: "task-1",
       agentmailThreadId: "thread-1",
     });
 
     expect(db.agentMailThreadBinding.create).toHaveBeenCalledWith({
       data: {
-        agentId: "agent-1",
         taskId: "task-1",
         agentmailThreadId: "thread-1",
       },
@@ -37,7 +36,6 @@ describe("task thread bindings", () => {
     const db = buildDb({ taskId: "task-1" });
 
     await recordTaskThreadId(db as never, {
-      agentId: "agent-1",
       taskId: "task-1",
       agentmailThreadId: "thread-1",
     });
@@ -49,7 +47,6 @@ describe("task thread bindings", () => {
     const db = buildDb({ taskId: "task-existing" });
 
     await expect(recordTaskThreadId(db as never, {
-      agentId: "agent-1",
       taskId: "task-requested",
       agentmailThreadId: "thread-1",
     })).rejects.toBeInstanceOf(AgentMailThreadBindingConflictError);
@@ -64,12 +61,10 @@ describe("task thread bindings", () => {
     });
 
     expect(result).toEqual({ taskId: "task-1" });
-    expect(db.agentMailThreadBinding.findUnique).toHaveBeenCalledWith({
+    expect(db.agentMailThreadBinding.findFirst).toHaveBeenCalledWith({
       where: {
-        agentId_agentmailThreadId: {
-          agentId: "agent-1",
-          agentmailThreadId: "thread-1",
-        },
+        agentmailThreadId: "thread-1",
+        task: { agentId: "agent-1" },
       },
       select: { taskId: true },
     });

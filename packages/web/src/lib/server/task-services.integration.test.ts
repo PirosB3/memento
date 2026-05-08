@@ -142,7 +142,6 @@ describe("task services", () => {
     expect(db.task.create.mock.calls[0][0].data).not.toHaveProperty("agentmailThreadIds");
     expect(db.agentMailThreadBinding.create).toHaveBeenCalledWith({
       data: {
-        agentId: "agent-1",
         taskId: task.taskId,
         agentmailThreadId: "thread-AAA",
       },

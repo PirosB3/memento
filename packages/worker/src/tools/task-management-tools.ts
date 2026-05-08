@@ -84,7 +84,7 @@ export function createSpawnTaskTool(agentId: string, _agentEmail: string): Agent
             },
           });
           if (agentmailThreadId) {
-            await recordTaskThreadId(tx, { agentId, taskId, agentmailThreadId });
+            await recordTaskThreadId(tx, { taskId, agentmailThreadId });
           }
         });
 

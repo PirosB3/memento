@@ -105,7 +105,7 @@ export function createRouteEmailToThreadTool(
         }
 
         try {
-          await recordTaskThreadId(prisma, { agentId, taskId: task.taskId, agentmailThreadId: threadId });
+          await recordTaskThreadId(prisma, { taskId: task.taskId, agentmailThreadId: threadId });
         } catch (err) {
           if (err instanceof AgentMailThreadBindingConflictError) {
             return {

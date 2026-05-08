@@ -151,7 +151,6 @@ export async function createTask(
 
     if (agentmailThreadId) {
       await recordTaskThreadId(tx, {
-        agentId: input.agentId,
         taskId,
         agentmailThreadId,
       });
