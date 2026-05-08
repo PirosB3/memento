@@ -11,6 +11,7 @@ CREATE TABLE "agentmail_thread_bindings" (
     "agentmail_thread_id" TEXT NOT NULL,
     "task_id" TEXT NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "last_seen_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "agentmail_thread_bindings_pkey" PRIMARY KEY ("agentmail_thread_id")
 );

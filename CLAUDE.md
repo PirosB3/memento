@@ -183,7 +183,6 @@ pnpm install
 ### Environment Variables
 Copy `.env.example` to `.env` at repo root and fill in:
 - `DATABASE_URL` — PostgreSQL connection string (default: `postgresql://summon:summon@localhost:5432/summon_dev`)
-- `DATABASE_READONLY_URL` — PostgreSQL connection string for the `summon_readonly` role. Exposed inside the worker so root's `bash` tool can run discovery queries via `psql` without risking writes. Provision the role with `SELECT` only on `public.*`.
 - `ANTHROPIC_API_KEY` — required for AI agent turns
 - `AGENTMAIL_API_KEY` — required for email operations
 - `BROWSERBASE_API_KEY` and `BROWSERBASE_PROJECT_ID` — required for `bb` and `browse`

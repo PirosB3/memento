@@ -252,17 +252,12 @@ async function collectPendingMessages(
       log.info(`  [${agent.agentId}] Accepting spam-labeled message from known contact ${senderEmail} (messageId=${messageId})`);
     }
 
-    const rawThreadId = (msg.threadId as string) ?? (msg.thread_id as string);
-    const agentmailThreadId = typeof rawThreadId === "string" && rawThreadId.trim()
-      ? rawThreadId.trim()
-      : null;
-
     pending.push({
       messageId,
       timestamp,
       senderEmail,
       isOwner: senderEmail === agent.ownerEmail.toLowerCase(),
-      agentmailThreadId,
+      agentmailThreadId: extractAgentmailThreadId(msg),
       legacyTag: extractLegacyTagFromRecipients(msg, agent.agentEmail),
     });
   }
@@ -274,6 +269,11 @@ function coerceAddressList(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === "string") return [raw];
   return [];
+}
+
+function extractAgentmailThreadId(msg: Record<string, unknown>): string | null {
+  const threadId = msg.threadId ?? msg.thread_id;
+  return typeof threadId === "string" && threadId.trim() ? threadId.trim() : null;
 }
 
 export function extractLegacyTagFromRecipients(
@@ -388,6 +388,48 @@ async function deliverMessages(
   return delivered;
 }
 
+async function resolveLegacyTaggedWorkflow(
+  temporal: Client,
+  agent: { agentId: string },
+  legacyTag: string | null,
+  agentmailThreadId: string,
+): Promise<{ workflowId: string } | null> {
+  if (!legacyTag) return null;
+
+  const task = await prisma.task.findFirst({
+    where: { agentId: agent.agentId, tag: legacyTag, isRoot: false },
+    select: { taskId: true },
+  });
+  if (!task) {
+    log.info(`  → Legacy +tag "${legacyTag}" did not match a child task for agent ${agent.agentId}`);
+    return null;
+  }
+
+  try {
+    await recordTaskThreadId(prisma, {
+      taskId: task.taskId,
+      agentmailThreadId,
+    });
+  } catch (err) {
+    if (err instanceof AgentMailThreadBindingConflictError) {
+      log.warn(
+        `  → Legacy +tag fallback conflict for AgentMail thread "${agentmailThreadId}": already bound to task ${err.existingTaskId}`,
+      );
+      return null;
+    }
+    throw err;
+  }
+
+  const workflowId = `task-${task.taskId}`;
+  if (!(await isWorkflowRunning(temporal, workflowId))) {
+    log.info(`  → Deferring legacy-tag email for stopped task ${task.taskId} (will retry on restart)`);
+    return null;
+  }
+
+  log.info(`  → Routed legacy +tag "${legacyTag}" by creating AgentMail thread binding for task ${task.taskId}`);
+  return { workflowId };
+}
+
 /**
  * Decide which workflow should receive a given message. Rules:
  *   - inbound AgentMail threadId matches an `agentmail_thread_bindings` row →
@@ -404,11 +446,12 @@ export async function resolveTargetWorkflow(
   msg: PendingInboundMessage,
 ): Promise<{ workflowId: string } | null> {
   const rootWorkflowId = `agent__${agent.agentId}__root`;
+  const threadId = msg.agentmailThreadId;
 
-  if (msg.agentmailThreadId) {
+  if (threadId) {
     const match = await findTaskByAgentmailThreadId(prisma, {
       agentId: agent.agentId,
-      agentmailThreadId: msg.agentmailThreadId,
+      agentmailThreadId: threadId,
     });
     if (match) {
       const workflowId = `task-${match.taskId}`;
@@ -418,38 +461,11 @@ export async function resolveTargetWorkflow(
       }
       return { workflowId };
     }
-    if (msg.legacyTag) {
-      const legacyTask = await prisma.task.findFirst({
-        where: { agentId: agent.agentId, tag: msg.legacyTag, isRoot: false },
-        select: { taskId: true },
-      });
-      if (legacyTask) {
-        try {
-          await recordTaskThreadId(prisma, {
-            taskId: legacyTask.taskId,
-            agentmailThreadId: msg.agentmailThreadId,
-          });
-        } catch (err) {
-          if (err instanceof AgentMailThreadBindingConflictError) {
-            log.warn(
-              `  → Legacy +tag fallback conflict for AgentMail thread "${msg.agentmailThreadId}": already bound to task ${err.existingTaskId}`,
-            );
-            return null;
-          }
-          throw err;
-        }
 
-        const workflowId = `task-${legacyTask.taskId}`;
-        if (!(await isWorkflowRunning(temporal, workflowId))) {
-          log.info(`  → Deferring legacy-tag email for stopped task ${legacyTask.taskId} (will retry on restart)`);
-          return null;
-        }
-        log.info(`  → Routed legacy +tag "${msg.legacyTag}" by creating AgentMail thread binding for task ${legacyTask.taskId}`);
-        return { workflowId };
-      }
-      log.info(`  → Legacy +tag "${msg.legacyTag}" did not match a child task for agent ${agent.agentId}`);
-    }
-    log.info(`  → No task bound to AgentMail thread "${msg.agentmailThreadId}", routing to root for agent ${agent.agentId}`);
+    const legacyRoute = await resolveLegacyTaggedWorkflow(temporal, agent, msg.legacyTag, threadId);
+    if (legacyRoute) return legacyRoute;
+
+    log.info(`  → No task bound to AgentMail thread "${threadId}", routing to root for agent ${agent.agentId}`);
   }
 
   if (!(await isWorkflowRunning(temporal, rootWorkflowId))) {

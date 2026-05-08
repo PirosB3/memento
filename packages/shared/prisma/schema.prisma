@@ -67,6 +67,7 @@ model AgentMailThreadBinding {
   agentmailThreadId String   @id @map("agentmail_thread_id")
   taskId            String   @map("task_id")
   createdAt         DateTime @default(now()) @map("created_at")
+  lastSeenAt        DateTime @default(now()) @map("last_seen_at")
 
   task Task @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
 

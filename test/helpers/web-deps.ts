@@ -26,6 +26,7 @@ export function createMockWebDeps(
     },
     agentMailThreadBinding: {
       findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
       create: vi.fn(),
       count: vi.fn(),
     },
@@ -38,6 +39,7 @@ export function createMockWebDeps(
     conversation: {
       create: vi.fn(),
     },
+    $queryRaw: vi.fn(),
   } as Record<string, unknown> & {
     $transaction?: <T>(fn: (tx: WebServiceDependencies["db"]) => Promise<T>) => Promise<T>;
   };

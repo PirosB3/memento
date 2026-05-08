@@ -4,7 +4,6 @@ import path from "node:path";
 const DEFAULT_TEMPORAL_ADDRESS = "localhost:7233";
 const WORKSPACE_ROOT = findWorkspaceRoot();
 const DEFAULT_DATABASE_URL = "postgresql://summon:summon@localhost:5432/summon_dev";
-const DEFAULT_DATABASE_READONLY_URL = "postgresql://summon_readonly:summon_readonly@localhost:5432/summon_dev";
 
 function findWorkspaceRoot(): string {
   let dir = process.cwd();
@@ -34,10 +33,6 @@ export function getTemporalAddress(): string {
 
 export function getDatabaseUrl(): string | undefined {
   return process.env.DATABASE_URL || DEFAULT_DATABASE_URL;
-}
-
-export function getDatabaseReadonlyUrl(): string | undefined {
-  return process.env.DATABASE_READONLY_URL || DEFAULT_DATABASE_READONLY_URL;
 }
 
 export function getWorkspaceRoot(): string {

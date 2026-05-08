@@ -16,6 +16,12 @@ import crypto from "crypto";
 
 const log = createLogger("task-management");
 
+type SpawnTaskParams = {
+  objective: string;
+  seed_thread_id?: string;
+  attach_threadId?: string;
+};
+
 let temporalClient: Client | null = null;
 async function getTemporalClient(): Promise<Client> {
   if (!temporalClient) {
@@ -25,7 +31,7 @@ async function getTemporalClient(): Promise<Client> {
   return temporalClient;
 }
 
-export function createSpawnTaskTool(agentId: string, _agentEmail: string): AgentTool {
+export function createSpawnTaskTool(agentId: string): AgentTool {
   return {
     name: "spawn_task",
     label: "Spawn Task",
@@ -44,7 +50,7 @@ export function createSpawnTaskTool(agentId: string, _agentEmail: string): Agent
     }),
     execute: async (_toolCallId, params) => {
       try {
-        const p = params as { objective: string; seed_thread_id?: string; attach_threadId?: string };
+        const p = params as SpawnTaskParams;
         const objective = p.objective;
         const taskId = crypto.randomUUID();
         const tag = taskId;

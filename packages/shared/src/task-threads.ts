@@ -32,39 +32,25 @@ export async function recordTaskThreadId(
   args: { taskId: string; agentmailThreadId: string },
 ): Promise<void> {
   const { taskId, agentmailThreadId } = args;
-  const existing = await prisma.agentMailThreadBinding.findUnique({
+  const [bound] = await prisma.$queryRaw<Array<{ task_id: string }>>`
+    INSERT INTO agentmail_thread_bindings (agentmail_thread_id, task_id)
+    VALUES (${agentmailThreadId}, ${taskId})
+    ON CONFLICT (agentmail_thread_id) DO UPDATE
+      SET last_seen_at = CURRENT_TIMESTAMP
+      WHERE agentmail_thread_bindings.task_id = EXCLUDED.task_id
+    RETURNING task_id
+  `;
+  if (bound) return;
+
+  const existing = await prisma.agentMailThreadBinding.findUniqueOrThrow({
     where: { agentmailThreadId },
     select: { taskId: true },
   });
-
-  if (existing) {
-    if (existing.taskId === taskId) return;
-    throw new AgentMailThreadBindingConflictError({
-      agentmailThreadId,
-      requestedTaskId: taskId,
-      existingTaskId: existing.taskId,
-    });
-  }
-
-  try {
-    await prisma.agentMailThreadBinding.create({
-      data: { taskId, agentmailThreadId },
-    });
-  } catch (error) {
-    const raced = await prisma.agentMailThreadBinding.findUnique({
-      where: { agentmailThreadId },
-      select: { taskId: true },
-    });
-    if (raced) {
-      if (raced.taskId === taskId) return;
-      throw new AgentMailThreadBindingConflictError({
-        agentmailThreadId,
-        requestedTaskId: taskId,
-        existingTaskId: raced.taskId,
-      });
-    }
-    throw error;
-  }
+  throw new AgentMailThreadBindingConflictError({
+    agentmailThreadId,
+    requestedTaskId: taskId,
+    existingTaskId: existing.taskId,
+  });
 }
 
 export async function findTaskByAgentmailThreadId(

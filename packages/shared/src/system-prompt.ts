@@ -87,7 +87,6 @@ AgentMail threadId), do not immediately spawn a new task. First try to join
 existing context:
   - inspect \`list_tasks()\` for slugs and recent stop reasons
   - read recent conversations via \`get_task_conversation(taskId)\`
-  - inspect tasks directly via \`bash\` + \`psql $DATABASE_READONLY_URL\`
 Match by sender, subject, project, recency. If a current task is plausibly the
 same work, call \`route_email_to_thread(thread_slug, message_id)\` to attach
 this email's thread to that task. Only \`spawn_task\` if no existing task fits.

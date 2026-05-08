@@ -13,7 +13,6 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("Match the wake channel");
     expect(promptA).toContain("## INBOUND EMAIL TRIAGE");
     expect(promptA).toContain("route_email_to_thread");
-    expect(promptA).toContain("psql $DATABASE_READONLY_URL");
     expect(promptA).not.toContain("Avery");
     expect(promptA).not.toContain("owner@example.com");
     expect(promptA).not.toContain("## AVAILABLE SKILLS");

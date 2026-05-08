@@ -149,7 +149,7 @@ export async function runPiAgentTurnImpl(
         createReadEmailsTool(agent.agentEmail),
         createListThreadsTool(agent.agentEmail),
         // Root: task management tools
-        createSpawnTaskTool(agent.agentId, agent.agentEmail),
+        createSpawnTaskTool(agent.agentId),
         createWakeTaskTool(),
         createCancelTaskTool(),
         createListTasksTool(agent.agentId),

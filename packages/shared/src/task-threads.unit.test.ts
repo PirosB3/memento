@@ -7,10 +7,10 @@ import {
 
 function buildDb(existing: { taskId: string } | null = null) {
   return {
+    $queryRaw: vi.fn().mockResolvedValue(existing ? [{ task_id: existing.taskId }] : [{ task_id: "task-1" }]),
     agentMailThreadBinding: {
-      findUnique: vi.fn().mockResolvedValue(existing),
       findFirst: vi.fn().mockResolvedValue(existing),
-      create: vi.fn().mockResolvedValue(undefined),
+      findUniqueOrThrow: vi.fn().mockResolvedValue(existing ?? { taskId: "task-existing" }),
     },
   };
 }
@@ -24,12 +24,8 @@ describe("task thread bindings", () => {
       agentmailThreadId: "thread-1",
     });
 
-    expect(db.agentMailThreadBinding.create).toHaveBeenCalledWith({
-      data: {
-        taskId: "task-1",
-        agentmailThreadId: "thread-1",
-      },
-    });
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(db.agentMailThreadBinding.findUniqueOrThrow).not.toHaveBeenCalled();
   });
 
   it("is idempotent when the thread is already bound to the same task", async () => {
@@ -40,16 +36,22 @@ describe("task thread bindings", () => {
       agentmailThreadId: "thread-1",
     });
 
-    expect(db.agentMailThreadBinding.create).not.toHaveBeenCalled();
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(db.agentMailThreadBinding.findUniqueOrThrow).not.toHaveBeenCalled();
   });
 
   it("rejects binding the same AgentMail thread to another task", async () => {
     const db = buildDb({ taskId: "task-existing" });
+    db.$queryRaw.mockResolvedValueOnce([]);
 
     await expect(recordTaskThreadId(db as never, {
       taskId: "task-requested",
       agentmailThreadId: "thread-1",
     })).rejects.toBeInstanceOf(AgentMailThreadBindingConflictError);
+    expect(db.agentMailThreadBinding.findUniqueOrThrow).toHaveBeenCalledWith({
+      where: { agentmailThreadId: "thread-1" },
+      select: { taskId: true },
+    });
   });
 
   it("looks up task ownership by agent and AgentMail thread", async () => {

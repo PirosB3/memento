@@ -114,9 +114,10 @@ describe("task services", () => {
     };
     const deps = createMockWebDeps({ workflows });
     const db = deps.db as unknown as {
+      $queryRaw: ReturnType<typeof vi.fn>;
       agent: { findUnique: ReturnType<typeof vi.fn> };
       task: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
-      agentMailThreadBinding: { findUnique: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
+      agentMailThreadBinding: { findUniqueOrThrow: ReturnType<typeof vi.fn> };
     };
 
     db.agent.findUnique.mockResolvedValue(buildAgentRecord());
@@ -127,8 +128,7 @@ describe("task services", () => {
     db.task.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) =>
       buildTaskRecord({ ...data, isRoot: false, tag: data.taskId }),
     );
-    db.agentMailThreadBinding.findUnique.mockResolvedValue(null);
-    db.agentMailThreadBinding.create.mockResolvedValue(undefined);
+    db.$queryRaw.mockResolvedValue([{ task_id: "task-new" }]);
 
     const task = await createTask(
       {
@@ -140,12 +140,8 @@ describe("task services", () => {
     );
 
     expect(db.task.create.mock.calls[0][0].data).not.toHaveProperty("agentmailThreadIds");
-    expect(db.agentMailThreadBinding.create).toHaveBeenCalledWith({
-      data: {
-        taskId: task.taskId,
-        agentmailThreadId: "thread-AAA",
-      },
-    });
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(db.agentMailThreadBinding.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(workflows.startTaskWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.taskId }),
     );
