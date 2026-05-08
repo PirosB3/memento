@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 
 /**
@@ -29,8 +30,9 @@ interface PrismaSlugLookup {
 
 /**
  * Append `-2`, `-3`, ... to `baseSlug` until we find one that's free for the
- * given agent. Caller is responsible for racing — Postgres' unique index on
- * `(agent_id, slug)` is the final authority.
+ * given agent. The Postgres unique index on `(agent_id, slug)` is still the
+ * final authority — pair this with `withSlugRetry` when you also want
+ * concurrent task creation to be safe.
  */
 export async function ensureUniqueSlug(
   prisma: PrismaClient | PrismaSlugLookup,
@@ -48,4 +50,45 @@ export async function ensureUniqueSlug(
     candidate = `${baseSlug}-${suffix}`;
     suffix += 1;
   }
+}
+
+/**
+ * True when the error is a Prisma unique-violation on the per-agent slug index
+ * (either the column list `[agent_id, slug]` or the index name
+ * `tasks_agent_id_slug_key`, depending on Prisma version).
+ */
+export function isSlugUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code !== "P2002") return false;
+  const target = err.meta?.target;
+  if (Array.isArray(target)) return target.includes("slug");
+  if (typeof target === "string") return target.includes("slug");
+  return false;
+}
+
+const DEFAULT_SLUG_RETRY_LIMIT = 5;
+
+/**
+ * Retry `op` when it loses the `(agent_id, slug)` unique race, calling
+ * `nextSlug` between attempts to produce a fresh candidate. Used by both task
+ * creation paths (web `createTask` and root's `spawn_task` tool) so concurrent
+ * task creation surfaces a fresh slug instead of a P2002 to the caller.
+ */
+export async function withSlugRetry<T>(
+  op: (slug: string) => Promise<T>,
+  initialSlug: string,
+  nextSlug: () => Promise<string>,
+  limit = DEFAULT_SLUG_RETRY_LIMIT,
+): Promise<T> {
+  let slug = initialSlug;
+  for (let attempt = 0; attempt <= limit; attempt += 1) {
+    try {
+      return await op(slug);
+    } catch (err) {
+      if (attempt === limit || !isSlugUniqueViolation(err)) throw err;
+      slug = await nextSlug();
+    }
+  }
+  // Unreachable: the loop either returns or throws.
+  throw new Error("withSlugRetry exhausted without resolution");
 }

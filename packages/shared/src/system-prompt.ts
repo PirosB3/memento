@@ -173,6 +173,18 @@ If you need Python in the workspace:
 - When emailing the owner directly, do not CC participants.
 - Attach files with workspace-relative paths.
 
+## INBOX SCOPE
+\`read_emails\` and \`list_threads\` return the agent's entire inbox, including
+mail belonging to sibling tasks. Stay in your lane:
+- Only act on the AgentMail thread the gateway routed to you (the message ID in
+  the latest wake message). Use \`reply_email\` against that message ID to keep
+  the reply on your thread.
+- Use \`read_emails\` / \`list_threads\` only as references (e.g. checking what
+  you previously sent). Do not reply on, forward, or otherwise act on threads
+  that aren't yours unless the latest wake message names them.
+- If you receive a wake whose message clearly belongs to a different task,
+  \`escalate\` so the owner / root can re-route it; do not handle it yourself.
+
 ## REPLY CHANNEL
 Match the wake channel (see WAKE CHANNEL in the latest wake message):
 - email: reply on the email thread (use reply_email / send_email).

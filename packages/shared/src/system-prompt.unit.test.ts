@@ -13,6 +13,7 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("Match the wake channel");
     expect(promptA).toContain("## INBOUND EMAIL TRIAGE");
     expect(promptA).toContain("route_email_to_thread");
+    expect(promptA).not.toContain("## INBOX SCOPE");
     expect(promptA).not.toContain("Avery");
     expect(promptA).not.toContain("owner@example.com");
     expect(promptA).not.toContain("## AVAILABLE SKILLS");
@@ -30,6 +31,8 @@ describe("buildSystemPrompt", () => {
     expect(promptA).toContain("Never quit work silently.");
     expect(promptA).toContain("## REPLY CHANNEL");
     expect(promptA).toContain("Match the wake channel");
+    expect(promptA).toContain("## INBOX SCOPE");
+    expect(promptA).toContain("entire inbox, including");
     expect(promptA).not.toContain("## INBOUND EMAIL TRIAGE");
     expect(promptA).not.toContain("route_email_to_thread");
     expect(promptA).not.toContain("avery+abc123@agentmail.test");

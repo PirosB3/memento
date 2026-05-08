@@ -8,6 +8,7 @@ import {
   generateTaskSlug,
   ensureUniqueSlug,
   recordTaskThreadId,
+  withSlugRetry,
 } from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 import type { AgentTool } from "../../pi-types.js";
@@ -56,43 +57,57 @@ export function createSpawnTaskTool(agentId: string): AgentTool {
         const tag = taskId;
         const now = new Date();
 
-        let slug: string;
-        if (p.seed_thread_id?.trim()) {
-          slug = p.seed_thread_id.trim();
+        const seedSlug = p.seed_thread_id?.trim();
+        let initialSlug: string;
+        if (seedSlug) {
           const collision = await prisma.task.findFirst({
-            where: { agentId, slug },
+            where: { agentId, slug: seedSlug },
             select: { taskId: true },
           });
           if (collision) {
             return {
-              content: [{ type: "text" as const, text: `Slug "${slug}" is already in use by task ${collision.taskId}. Pick a different seed_thread_id or omit it to auto-generate.` }],
+              content: [{ type: "text" as const, text: `Slug "${seedSlug}" is already in use by task ${collision.taskId}. Pick a different seed_thread_id or omit it to auto-generate.` }],
               details: { error: true, reason: "SLUG_COLLISION" },
             };
           }
+          initialSlug = seedSlug;
         } else {
-          slug = await ensureUniqueSlug(prisma, agentId, generateTaskSlug(objective, now));
+          initialSlug = await ensureUniqueSlug(prisma, agentId, generateTaskSlug(objective, now));
         }
 
         const agentmailThreadId = p.attach_threadId?.trim() || null;
 
-        log.info(`Spawning task: ${taskId} agent=${agentId} slug=${slug}`, { objective });
+        log.info(`Spawning task: ${taskId} agent=${agentId} slug=${initialSlug}`, { objective });
 
-        await prisma.$transaction(async (tx) => {
-          await tx.task.create({
-            data: {
-              taskId,
-              agentId,
-              tag,
-              slug,
-              objective,
-              status: "RUNNING",
-              isRoot: false,
-            },
-          });
-          if (agentmailThreadId) {
-            await recordTaskThreadId(tx, { taskId, agentmailThreadId });
-          }
-        });
+        // Auto-generated slugs retry on the unique-index race; user-supplied
+        // `seed_thread_id` does not — surface the collision as an error so the
+        // operator picks a different one.
+        const finalSlug = await withSlugRetry(
+          async (slug) => {
+            await prisma.$transaction(async (tx) => {
+              await tx.task.create({
+                data: {
+                  taskId,
+                  agentId,
+                  tag,
+                  slug,
+                  objective,
+                  status: "RUNNING",
+                  isRoot: false,
+                },
+              });
+              if (agentmailThreadId) {
+                await recordTaskThreadId(tx, { taskId, agentmailThreadId });
+              }
+            });
+            return slug;
+          },
+          initialSlug,
+          async () => {
+            if (seedSlug) throw new Error(`Slug "${seedSlug}" is already in use`);
+            return ensureUniqueSlug(prisma, agentId, generateTaskSlug(objective, now));
+          },
+        );
 
         const temporal = await getTemporalClient();
         await temporal.workflow.start("taskWorkflow", {
@@ -101,14 +116,14 @@ export function createSpawnTaskTool(agentId: string): AgentTool {
           workflowId: `task-${taskId}`,
         });
 
-        log.info(`Task spawned: ${taskId} slug=${slug}`);
+        log.info(`Task spawned: ${taskId} slug=${finalSlug}`);
 
         return {
           content: [{
             type: "text" as const,
-            text: `Child task created!\nTask ID: ${taskId}\nSlug: ${slug}\nObjective: ${objective}\n${agentmailThreadId ? `Bound AgentMail thread: ${agentmailThreadId}\n` : ""}\nThe task is now running independently.`,
+            text: `Child task created!\nTask ID: ${taskId}\nSlug: ${finalSlug}\nObjective: ${objective}\n${agentmailThreadId ? `Bound AgentMail thread: ${agentmailThreadId}\n` : ""}\nThe task is now running independently.`,
           }],
-          details: { taskId, tag, slug, objective, agentmailThreadId },
+          details: { taskId, tag, slug: finalSlug, objective, agentmailThreadId },
         };
       } catch (error) {
         log.error("Failed to spawn task", error);

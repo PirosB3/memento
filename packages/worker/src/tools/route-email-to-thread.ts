@@ -28,6 +28,15 @@ async function getTemporalClient(): Promise<Client> {
   return temporalClient;
 }
 
+async function isWorkflowRunning(temporal: Client, workflowId: string): Promise<boolean> {
+  try {
+    const description = await temporal.workflow.getHandle(workflowId).describe();
+    return description.status.name === "RUNNING";
+  } catch {
+    return false;
+  }
+}
+
 let agentmailClient: { inboxes: { messages: { get: (inboxId: string, messageId: string) => Promise<unknown> } } } | null = null;
 function getAgentmailClient() {
   if (!agentmailClient) {
@@ -98,6 +107,22 @@ export function createRouteEmailToThreadTool(
           };
         }
 
+        // Check the workflow is RUNNING before any side effects. A stopped
+        // child can't receive the signal, so writing the binding +
+        // conversation row would leave operator-visible state pointing at
+        // work that won't happen until somebody manually restarts the task.
+        const temporal = await getTemporalClient();
+        const workflowId = `task-${task.taskId}`;
+        if (!(await isWorkflowRunning(temporal, workflowId))) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Task ${task.taskId} (slug ${thread_slug}) is not running — restart it before routing email to it.`,
+            }],
+            details: { error: true, reason: "TASK_NOT_RUNNING", taskId: task.taskId, slug: thread_slug },
+          };
+        }
+
         try {
           await recordTaskThreadId(prisma, { taskId: task.taskId, agentmailThreadId: threadId });
         } catch (err) {
@@ -146,8 +171,7 @@ Sender: ${senderEmail || "unknown"}`,
           log.warn(`publishTurnSnapshot after route_email_to_thread failed: ${String(err)}`);
         });
 
-        const temporal = await getTemporalClient();
-        const handle = temporal.workflow.getHandle(`task-${task.taskId}`);
+        const handle = temporal.workflow.getHandle(workflowId);
         if (signalName === SIGNAL_OWNER) {
           await handle.signal(SIGNAL_OWNER, message_id);
         } else {

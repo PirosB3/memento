@@ -7,7 +7,12 @@ export type { Logger } from "./logger";
 export { getAgentsDir, getDatabaseUrl, getTemporalAddress, getWorkspaceRoot } from "./runtime";
 export { buildHtmlSignature, buildTextSignature } from "./signature";
 export type { AgentSignature } from "./signature";
-export { generateTaskSlug, ensureUniqueSlug } from "./slug";
+export {
+  generateTaskSlug,
+  ensureUniqueSlug,
+  isSlugUniqueViolation,
+  withSlugRetry,
+} from "./slug";
 export {
   coerceAgentMailAddressList,
   extractAgentMailThreadId,
