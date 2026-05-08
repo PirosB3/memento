@@ -20,10 +20,11 @@ function buildAgentRecord() {
   } as Agent;
 }
 
-function buildTaskRecord(input: { isRoot: boolean; tag: string; objective: string }) {
+function buildTaskRecord(input: { isRoot: boolean; tag: string; objective: string; slug?: string | null }) {
   return {
     taskId: "task-1",
     agentId: "agent-1",
+    slug: null,
     status: "RUNNING",
     parentTaskId: null,
     temporalRunId: "run-1",
@@ -42,14 +43,21 @@ function buildTaskRecord(input: { isRoot: boolean; tag: string; objective: strin
 describe("prompt context helpers", () => {
   it("builds a context seed with task and config snapshot", () => {
     const agent = buildAgentRecord();
-    const task = buildTaskRecord({ isRoot: false, tag: "abc123", objective: "Follow up with Alice" });
+    const task = buildTaskRecord({
+      isRoot: false,
+      tag: "abc123",
+      slug: "follow-up-with-alice-2026-05-07",
+      objective: "Follow up with Alice",
+    });
 
     const message = buildContextSeedMessage(agent, task);
 
     expect(message).toContain("## CONTEXT SEED");
     expect(message).toContain("AGENT NAME: Avery");
     expect(message).toContain("OWNER EMAIL: owner@example.com");
-    expect(message).toContain("TASK EMAIL: avery+abc123@agentmail.test");
+    expect(message).toContain("AGENT EMAIL: avery@agentmail.test");
+    expect(message).toContain("THREAD REF: follow-up-with-alice-2026-05-07");
+    expect(message).not.toContain("avery+abc123");
     expect(message).toContain("Follow up with Alice");
     expect(message).toContain("### SOUL");
   });

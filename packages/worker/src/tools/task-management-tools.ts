@@ -1,11 +1,27 @@
 import { Type } from "@sinclair/typebox";
-import { prisma, createLogger, TASK_QUEUE, getTemporalAddress, publishTurnSnapshot } from "@summon/shared";
+import {
+  prisma,
+  createLogger,
+  TASK_QUEUE,
+  getTemporalAddress,
+  publishTurnSnapshot,
+  generateTaskSlug,
+  ensureUniqueSlug,
+  recordTaskThreadId,
+  withSlugRetry,
+} from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 import type { AgentTool } from "../../pi-types.js";
 import { Client, Connection } from "@temporalio/client";
 import crypto from "crypto";
 
 const log = createLogger("task-management");
+
+type SpawnTaskParams = {
+  objective: string;
+  seed_thread_id?: string;
+  attach_threadId?: string;
+};
 
 let temporalClient: Client | null = null;
 async function getTemporalClient(): Promise<Client> {
@@ -16,34 +32,82 @@ async function getTemporalClient(): Promise<Client> {
   return temporalClient;
 }
 
-function addTag(email: string, tag: string): string {
-  const [local, domain] = email.split("@");
-  return `${local}+${tag}@${domain}`;
-}
-
-export function createSpawnTaskTool(agentId: string, agentEmail: string): AgentTool {
+export function createSpawnTaskTool(agentId: string): AgentTool {
   return {
     name: "spawn_task",
     label: "Spawn Task",
     description:
-      "Create a new child task with its own objective and email address. The task starts immediately and runs independently. This is a non-blocking operation — the child task will work on its own. Use list_tasks() later to check on it.",
+      "Create a new child task with its own objective. The task starts immediately and runs independently. The agent's bare email address is used for all outbound mail; the new task gets a per-agent unique `slug` that appears in the email signature footer for operator debugging. This is non-blocking — use list_tasks() later to check on it.",
     parameters: Type.Object({
       objective: Type.String({
         description: "Clear, specific objective for the child task. Be detailed about what needs to be accomplished.",
       }),
+      seed_thread_id: Type.Optional(Type.String({
+        description: "Optional preferred slug. Must be unique for this agent — fails if it collides with an existing task's slug. If omitted, a slug is auto-generated from the objective.",
+      })),
+      attach_threadId: Type.Optional(Type.String({
+        description: "Optional AgentMail threadId to immediately bind to this task — useful when spawning from a triaged inbound email.",
+      })),
     }),
     execute: async (_toolCallId, params) => {
       try {
-        const objective = (params as { objective: string }).objective;
+        const p = params as SpawnTaskParams;
+        const objective = p.objective;
         const taskId = crypto.randomUUID();
         const tag = taskId;
-        const taskEmail = addTag(agentEmail, tag);
+        const now = new Date();
 
-        log.info(`Spawning task: ${taskId} agent=${agentId}`, { objective });
+        const seedSlug = p.seed_thread_id?.trim();
+        let initialSlug: string;
+        if (seedSlug) {
+          const collision = await prisma.task.findFirst({
+            where: { agentId, slug: seedSlug },
+            select: { taskId: true },
+          });
+          if (collision) {
+            return {
+              content: [{ type: "text" as const, text: `Slug "${seedSlug}" is already in use by task ${collision.taskId}. Pick a different seed_thread_id or omit it to auto-generate.` }],
+              details: { error: true, reason: "SLUG_COLLISION" },
+            };
+          }
+          initialSlug = seedSlug;
+        } else {
+          initialSlug = await ensureUniqueSlug(prisma, agentId, generateTaskSlug(objective, now));
+        }
 
-        await prisma.task.create({
-          data: { taskId, agentId, tag, objective, status: "RUNNING", isRoot: false },
-        });
+        const agentmailThreadId = p.attach_threadId?.trim() || null;
+
+        log.info(`Spawning task: ${taskId} agent=${agentId} slug=${initialSlug}`, { objective });
+
+        // Auto-generated slugs retry on the unique-index race; user-supplied
+        // `seed_thread_id` does not — surface the collision as an error so the
+        // operator picks a different one.
+        const finalSlug = await withSlugRetry(
+          async (slug) => {
+            await prisma.$transaction(async (tx) => {
+              await tx.task.create({
+                data: {
+                  taskId,
+                  agentId,
+                  tag,
+                  slug,
+                  objective,
+                  status: "RUNNING",
+                  isRoot: false,
+                },
+              });
+              if (agentmailThreadId) {
+                await recordTaskThreadId(tx, { taskId, agentmailThreadId });
+              }
+            });
+            return slug;
+          },
+          initialSlug,
+          async () => {
+            if (seedSlug) throw new Error(`Slug "${seedSlug}" is already in use`);
+            return ensureUniqueSlug(prisma, agentId, generateTaskSlug(objective, now));
+          },
+        );
 
         const temporal = await getTemporalClient();
         await temporal.workflow.start("taskWorkflow", {
@@ -52,14 +116,14 @@ export function createSpawnTaskTool(agentId: string, agentEmail: string): AgentT
           workflowId: `task-${taskId}`,
         });
 
-        log.info(`Task spawned: ${taskId} email=${taskEmail}`);
+        log.info(`Task spawned: ${taskId} slug=${finalSlug}`);
 
         return {
           content: [{
             type: "text" as const,
-            text: `Child task created!\nTask ID: ${taskId}\nTask email: ${taskEmail}\nObjective: ${objective}\n\nThe task is now running independently.`,
+            text: `Child task created!\nTask ID: ${taskId}\nSlug: ${finalSlug}\nObjective: ${objective}\n${agentmailThreadId ? `Bound AgentMail thread: ${agentmailThreadId}\n` : ""}\nThe task is now running independently.`,
           }],
-          details: { taskId, tag, taskEmail, objective },
+          details: { taskId, tag, slug: finalSlug, objective, agentmailThreadId },
         };
       } catch (error) {
         log.error("Failed to spawn task", error);
@@ -181,6 +245,9 @@ export function createListTasksTool(agentId: string): AgentTool {
         const tasks = await prisma.task.findMany({
           where: { agentId, isRoot: false },
           orderBy: { createdAt: "desc" },
+          include: {
+            _count: { select: { agentmailThreadBindings: true } },
+          },
         });
 
         const results = [];
@@ -192,6 +259,8 @@ export function createListTasksTool(agentId: string): AgentTool {
           results.push({
             taskId: t.taskId,
             tag: t.tag,
+            slug: t.slug,
+            agentmailThreadCount: t._count.agentmailThreadBindings,
             objective: t.objective,
             status: t.status,
             lastStopReason: lastLog?.stopReason ?? null,
@@ -202,7 +271,7 @@ export function createListTasksTool(agentId: string): AgentTool {
         const formatted = results.length === 0
           ? "No child tasks."
           : results.map((t) =>
-              `Task: ${t.taskId}\n  Tag: ${t.tag}\n  Objective: ${t.objective}\n  Status: ${t.status}\n  Last stop reason: ${t.lastStopReason ?? "none"}\n  Created: ${t.createdAt}`
+              `Task: ${t.taskId}\n  Slug: ${t.slug ?? "(none)"}\n  Objective: ${t.objective}\n  Status: ${t.status}\n  AgentMail threads attached: ${t.agentmailThreadCount}\n  Last stop reason: ${t.lastStopReason ?? "none"}\n  Created: ${t.createdAt}`
             ).join("\n---\n");
 
         return {

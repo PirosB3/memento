@@ -31,6 +31,7 @@ model Task {
   taskId         String    @id @map("task_id")
   agentId        String    @map("agent_id")
   tag            String    @unique
+  slug           String?
   objective      String
   status         String    @default("RUNNING")
   isRoot         Boolean   @default(false) @map("is_root")
@@ -50,14 +51,28 @@ model Task {
   parentTask Task?  @relation("TaskSubtasks", fields: [parentTaskId], references: [taskId])
   subtasks   Task[] @relation("TaskSubtasks")
 
-  conversations Conversation[]
-  turnLogs      AgentTurnLog[]
-  schedules     Schedule[]
-  turnSnapshot  TurnSnapshot?
+  conversations           Conversation[]
+  turnLogs                AgentTurnLog[]
+  schedules               Schedule[]
+  turnSnapshot            TurnSnapshot?
+  agentmailThreadBindings AgentMailThreadBinding[]
 
+  @@unique([agentId, slug])
   @@index([agentId])
   @@index([tag])
   @@map("tasks")
+}
+
+model AgentMailThreadBinding {
+  agentmailThreadId String   @id @map("agentmail_thread_id")
+  taskId            String   @map("task_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  lastSeenAt        DateTime @default(now()) @map("last_seen_at")
+
+  task Task @relation(fields: [taskId], references: [taskId], onDelete: Cascade)
+
+  @@index([taskId])
+  @@map("agentmail_thread_bindings")
 }
 
 model Conversation {

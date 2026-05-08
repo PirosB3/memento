@@ -19,12 +19,6 @@ type ControlPlaneOptions = {
   fallbackToFirstAgent?: boolean;
 };
 
-function childAliasEmail(agentEmail: string, tag: string): string {
-  const [local, domain] = agentEmail.split("@");
-  if (!local || !domain) return agentEmail;
-  return `${local}+${tag}@${domain}`;
-}
-
 function summarizeAgent(agent: Awaited<ReturnType<typeof getStoppedAwareAgentList>>[number]): ControlPlaneAgentSummaryView {
   const childTasks = agent.tasks.filter((task) => !task.isRoot);
   const hasActiveTask = agent.tasks.some(
@@ -113,7 +107,7 @@ export async function getControlPlaneView(
         selectedTask: {
           key: taskView.task.taskId,
           title: taskTitle(taskView.task),
-          email: childAliasEmail(selectedAgent.agentEmail, taskView.task.tag),
+          email: selectedAgent.agentEmail,
           detail: taskView.task,
         },
       };

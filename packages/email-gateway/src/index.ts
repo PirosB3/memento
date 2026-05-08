@@ -7,22 +7,35 @@ dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
 
 import { Client, Connection } from "@temporalio/client";
 import { AgentMailClient } from "agentmail";
-import { prisma, SIGNAL_EMAIL, SIGNAL_OWNER, createLogger, getTemporalAddress } from "@summon/shared";
+import {
+  prisma,
+  SIGNAL_EMAIL,
+  SIGNAL_OWNER,
+  createLogger,
+  getTemporalAddress,
+  findTaskByAgentmailThreadId,
+  recordTaskThreadId,
+  AgentMailThreadBindingConflictError,
+  coerceAgentMailAddressList,
+  extractAgentMailThreadId,
+  extractBareEmailAddress,
+} from "@summon/shared";
 import type { InboundEmail } from "@summon/shared";
 
 const POLL_INTERVAL_MS = 15_000;
 const log = createLogger("email-gateway");
 
 /**
- * A parsed inbound message ready for routing. `isOwner` and `tag` are resolved
- * once here so the routing step doesn't need to re-parse.
+ * A parsed inbound message ready for routing. `isOwner` and the AgentMail
+ * threadId are resolved once here so the routing step doesn't need to re-parse.
  */
 interface PendingInboundMessage {
   messageId: string;
   timestamp: string;
   senderEmail: string;
   isOwner: boolean;
-  tag: string | null;
+  agentmailThreadId: string | null;
+  legacyTag: string | null;
 }
 
 /**
@@ -31,7 +44,6 @@ interface PendingInboundMessage {
  */
 interface ParticipantBatch {
   workflowId: string;
-  tag?: string;
   messageIds: string[];
   senders: string[];
   latestTimestamp: string;
@@ -79,7 +91,8 @@ export async function pollAllInboxes(agentmail: AgentMailClient, temporal: Clien
 
   for (const agent of agents) {
     try {
-      if (!(await isWorkflowRunning(temporal, `agent__${agent.agentId}__root`))) {
+      const rootWorkflowRunning = await isWorkflowRunning(temporal, `agent__${agent.agentId}__root`);
+      if (!rootWorkflowRunning) {
         log.info(`  [${agent.agentId}] Skipping inbox poll because root workflow is stopped`);
         continue;
       }
@@ -88,27 +101,6 @@ export async function pollAllInboxes(agentmail: AgentMailClient, temporal: Clien
       log.error(`Error polling inbox for agent ${agent.agentId}:`, err);
     }
   }
-}
-
-/**
- * Parse +tag from recipient address.
- * E.g. "john+abc123@agentmail.to" → "abc123"
- */
-export function parseTag(toAddresses: string[], agentEmail: string): string | null {
-  const [localPart, domain] = agentEmail.split("@");
-  const escapedLocal = localPart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedDomain = domain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`^${escapedLocal}\\+([^@]+)@${escapedDomain}$`, "i");
-
-  for (const addr of toAddresses) {
-    // Extract email from "Name <email>" format
-    const normalized = addr.includes("<")
-      ? addr.match(/<(.+)>/)?.[1] ?? addr
-      : addr;
-    const match = normalized.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
 }
 
 export function isSelfSentEmail(fromField: string, agentEmail: string): boolean {
@@ -123,11 +115,7 @@ export function isSelfSentEmail(fromField: string, agentEmail: string): boolean 
  * surrounding whitespace. Returns "" for empty/undefined input.
  */
 export function extractBareAddress(raw: string | undefined | null): string {
-  if (!raw) return "";
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const match = trimmed.match(/<([^>]+)>/);
-  return (match?.[1] ?? trimmed).trim().toLowerCase();
+  return extractBareEmailAddress(raw);
 }
 
 /**
@@ -153,8 +141,8 @@ export function collectOutboundRecipients(
   const taggedPrefix = `${local}+`;
   const taggedSuffix = `@${domain}`;
 
-  const to = coerceAddressList(msg.to);
-  const cc = coerceAddressList(msg.cc);
+  const to = coerceAgentMailAddressList(msg.to);
+  const cc = coerceAgentMailAddressList(msg.cc);
 
   for (const raw of [...to, ...cc]) {
     const email = extractBareAddress(raw);
@@ -249,9 +237,6 @@ async function collectPendingMessages(
       ?? (msg.created_at as string)
       ?? new Date().toISOString();
 
-    const toAddresses = coerceAddressList(msg.to);
-    const ccAddresses = coerceAddressList(msg.cc);
-
     const senderEmail = extractBareAddress(from);
 
     // Spam post-filter: AgentMail list now returns spam-labeled messages
@@ -272,17 +257,43 @@ async function collectPendingMessages(
       timestamp,
       senderEmail,
       isOwner: senderEmail === agent.ownerEmail.toLowerCase(),
-      tag: parseTag([...toAddresses, ...ccAddresses], agent.agentEmail),
+      agentmailThreadId: extractAgentMailThreadId(msg),
+      legacyTag: extractLegacyTagFromRecipients(msg, agent.agentEmail),
     });
   }
 
   return pending;
 }
 
-function coerceAddressList(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map(String);
-  if (typeof raw === "string") return [raw];
-  return [];
+export function extractLegacyTagFromRecipients(
+  msg: Record<string, unknown>,
+  agentEmail: string,
+): string | null {
+  const atIndex = agentEmail.lastIndexOf("@");
+  if (atIndex < 1) return null;
+
+  const baseLocal = agentEmail.slice(0, atIndex).toLowerCase();
+  const domain = agentEmail.slice(atIndex + 1).toLowerCase();
+  const legacyPrefix = `${baseLocal}+`;
+  const candidates = [
+    ...coerceAgentMailAddressList(msg.to),
+    ...coerceAgentMailAddressList(msg.cc),
+  ];
+
+  for (const candidate of candidates) {
+    const address = extractBareAddress(candidate);
+    const candidateAtIndex = address.lastIndexOf("@");
+    if (candidateAtIndex < 1) continue;
+
+    const local = address.slice(0, candidateAtIndex);
+    const candidateDomain = address.slice(candidateAtIndex + 1);
+    if (candidateDomain !== domain || !local.startsWith(legacyPrefix)) continue;
+
+    const tag = local.slice(legacyPrefix.length);
+    if (tag) return tag;
+  }
+
+  return null;
 }
 
 /**
@@ -320,7 +331,6 @@ async function deliverMessages(
     if (!existing) {
       participantBatches.set(route.workflowId, {
         workflowId: route.workflowId,
-        tag: route.tag,
         messageIds: [msg.messageId],
         senders: [msg.senderEmail],
         latestTimestamp: msg.timestamp,
@@ -354,7 +364,6 @@ async function deliverMessages(
         sender: batch.senders[0],
         inboxId: agent.agentEmail,
         timestamp: batch.latestTimestamp,
-        tag: batch.tag,
         batchMessageIds: batch.messageIds,
         batchSenders: batch.senders,
       };
@@ -368,39 +377,94 @@ async function deliverMessages(
   return delivered;
 }
 
+async function resolveLegacyTaggedWorkflow(
+  temporal: Client,
+  agent: { agentId: string },
+  legacyTag: string | null,
+  agentmailThreadId: string,
+): Promise<{ workflowId: string } | null> {
+  if (!legacyTag) return null;
+
+  const task = await prisma.task.findFirst({
+    where: { agentId: agent.agentId, tag: legacyTag, isRoot: false },
+    select: { taskId: true },
+  });
+  if (!task) {
+    log.info(`  → Legacy +tag "${legacyTag}" did not match a child task for agent ${agent.agentId}`);
+    return null;
+  }
+
+  try {
+    await recordTaskThreadId(prisma, {
+      taskId: task.taskId,
+      agentmailThreadId,
+    });
+  } catch (err) {
+    if (err instanceof AgentMailThreadBindingConflictError) {
+      log.warn(
+        `  → Legacy +tag fallback conflict for AgentMail thread "${agentmailThreadId}": already bound to task ${err.existingTaskId}`,
+      );
+      return null;
+    }
+    throw err;
+  }
+
+  const workflowId = `task-${task.taskId}`;
+  const workflowRunning = await isWorkflowRunning(temporal, workflowId);
+  if (!workflowRunning) {
+    log.info(`  → Deferring legacy-tag email for stopped task ${task.taskId} (will retry on restart)`);
+    return null;
+  }
+
+  log.info(`  → Routed legacy +tag "${legacyTag}" by creating AgentMail thread binding for task ${task.taskId}`);
+  return { workflowId };
+}
+
 /**
  * Decide which workflow should receive a given message. Rules:
- *   - `+tag` that matches a known task → that child task's workflow
- *   - `+tag` with no matching task (orphan) → root workflow
- *   - no tag → root workflow
+ *   - inbound AgentMail threadId matches an `agentmail_thread_bindings` row →
+ *     that task's workflow
+ *   - temporary cutover fallback: unmatched legacy `+tag` recipients lazily
+ *     create a bridge binding and route to that child
+ *   - no match → root workflow
  * Returns `null` if the chosen workflow isn't running; the gateway will defer
  * the message (leave it unprocessed) and retry on the next poll.
  */
-async function resolveTargetWorkflow(
+export async function resolveTargetWorkflow(
   temporal: Client,
   agent: { agentId: string; agentEmail: string },
   msg: PendingInboundMessage,
-): Promise<{ workflowId: string; tag?: string } | null> {
+): Promise<{ workflowId: string } | null> {
   const rootWorkflowId = `agent__${agent.agentId}__root`;
+  const threadId = msg.agentmailThreadId;
 
-  if (msg.tag && msg.tag !== "root") {
-    const task = await prisma.task.findUnique({ where: { tag: msg.tag } });
-    if (task) {
-      const workflowId = `task-${task.taskId}`;
-      if (!(await isWorkflowRunning(temporal, workflowId))) {
-        log.info(`  → Deferring email for stopped task ${task.taskId} (will retry on restart)`);
+  if (threadId) {
+    const match = await findTaskByAgentmailThreadId(prisma, {
+      agentId: agent.agentId,
+      agentmailThreadId: threadId,
+    });
+    if (match) {
+      const workflowId = `task-${match.taskId}`;
+      const workflowRunning = await isWorkflowRunning(temporal, workflowId);
+      if (!workflowRunning) {
+        log.info(`  → Deferring email for stopped task ${match.taskId} (will retry on restart)`);
         return null;
       }
-      return { workflowId, tag: msg.tag };
+      return { workflowId };
     }
-    log.info(`  → Orphan tag "${msg.tag}", routing to root task for agent ${agent.agentId}`);
+
+    const legacyRoute = await resolveLegacyTaggedWorkflow(temporal, agent, msg.legacyTag, threadId);
+    if (legacyRoute) return legacyRoute;
+
+    log.info(`  → No task bound to AgentMail thread "${threadId}", routing to root for agent ${agent.agentId}`);
   }
 
-  if (!(await isWorkflowRunning(temporal, rootWorkflowId))) {
+  const rootWorkflowRunning = await isWorkflowRunning(temporal, rootWorkflowId);
+  if (!rootWorkflowRunning) {
     log.info(`  → Deferring email because root workflow is stopped for agent ${agent.agentId} (will retry on restart)`);
     return null;
   }
-  return { workflowId: rootWorkflowId, tag: msg.tag ?? undefined };
+  return { workflowId: rootWorkflowId };
 }
 
 /**

@@ -4,7 +4,6 @@ import path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDownloadEmailAttachmentTool,
-  createFilteredReadEmailsTool,
   createReadEmailTool,
   createReplyEmailTool,
   createSendEmailTool,
@@ -63,7 +62,7 @@ describe("agentmail tools", () => {
     const client = createAgentMailStub();
     client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-sig-1" });
 
-    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, {
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, {
       displayName: "Emma P.",
       description: "Inbox concierge for the Smith household.",
       profileImageUrl: "https://pub-example.test/pfps/emma.png",
@@ -89,7 +88,7 @@ describe("agentmail tools", () => {
     const client = createAgentMailStub();
     client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-sig-2" });
 
-    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, {
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, {
       displayName: "Emma P.",
       description: null,
       profileImageUrl: null,
@@ -110,13 +109,35 @@ describe("agentmail tools", () => {
     expect(sendParams.text).toContain("Text body\n\n-- \nEmma P.");
   });
 
+  it("includes the threadRef line in the signature when provided", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-ref" });
+
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, {
+      displayName: "Emma P.",
+      description: null,
+      profileImageUrl: null,
+      threadRef: "demo-2026-05-07",
+    });
+    await tool.execute("call-ref", {
+      to: "person@example.com",
+      subject: "Hello",
+      body: "Hi",
+    });
+
+    const [, sendParams] = client.inboxes.messages.send.mock.calls[0];
+    expect(sendParams.text).toContain("\nref: demo-2026-05-07\n");
+    expect(sendParams.html).toContain("ref: demo-2026-05-07");
+  });
+
   it("skips signature injection when no body or html is provided", async () => {
     const agentDir = createTempAgentDir();
     fs.writeFileSync(path.join(agentDir, "note.txt"), "attached-only", "utf-8");
     const client = createAgentMailStub();
     client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-sig-3" });
 
-    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, {
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, {
       displayName: "Emma P.",
       description: "Helps you schedule meetings without the back-and-forth.",
       profileImageUrl: "https://pub-example.test/pfps/emma.png",
@@ -132,23 +153,23 @@ describe("agentmail tools", () => {
     expect(sendParams.html).toBeUndefined();
   });
 
-  it("auto-ccs the tagged address for child task sends and dedupes it", async () => {
+  it("does not inject any tagged routing CC", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();
-    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-1" });
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-no-tag" });
 
-    const tool = createSendEmailTool("avery@agentmail.test", agentDir, "abc123");
-    await tool.execute("call-1", {
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir);
+    await tool.execute("call-no-tag", {
       to: "person@example.com",
       subject: "Hello",
       body: "Hi there",
-      cc: ["owner@example.com", "avery+abc123@agentmail.test"],
+      cc: ["owner@example.com"],
     });
 
     expect(client.inboxes.messages.send).toHaveBeenCalledWith(
       "avery@agentmail.test",
       expect.objectContaining({
-        cc: ["owner@example.com", "avery+abc123@agentmail.test"],
+        cc: ["owner@example.com"],
       }),
     );
   });
@@ -195,6 +216,41 @@ describe("agentmail tools", () => {
     expect(getText(result)).toContain("1 attachment (generated/hello.txt)");
   });
 
+  it("invokes the threadIdHook with the threadId from the send response", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-th-1", threadId: "thread-AAA" });
+
+    const hook = vi.fn();
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, hook);
+    await tool.execute("call-hook", {
+      to: "person@example.com",
+      subject: "Hello",
+      body: "Hi",
+    });
+
+    expect(hook).toHaveBeenCalledWith("thread-AAA");
+    expect(client.inboxes.messages.get).not.toHaveBeenCalled();
+  });
+
+  it("falls back to messages.get when the send response omits threadId", async () => {
+    const agentDir = createTempAgentDir();
+    const client = createAgentMailStub();
+    client.inboxes.messages.send.mockResolvedValue({ messageId: "msg-th-2" });
+    client.inboxes.messages.get.mockResolvedValue({ messageId: "msg-th-2", threadId: "thread-BBB" });
+
+    const hook = vi.fn();
+    const tool = createSendEmailTool("avery@agentmail.test", agentDir, undefined, hook);
+    await tool.execute("call-hook-fallback", {
+      to: "person@example.com",
+      subject: "Hello",
+      body: "Hi",
+    });
+
+    expect(client.inboxes.messages.get).toHaveBeenCalledWith("avery@agentmail.test", "msg-th-2");
+    expect(hook).toHaveBeenCalledWith("thread-BBB");
+  });
+
   it("rejects sends with no content", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();
@@ -233,62 +289,15 @@ describe("agentmail tools", () => {
     expect(getText(traversalResult)).toContain("Attachment path traversal not allowed");
   });
 
-  it("manually constructs reply-all recipients for a child task (no replyAll flag, +tag in cc)", async () => {
-    const agentDir = createTempAgentDir();
-    fs.writeFileSync(path.join(agentDir, "notes.txt"), "reply attachment", "utf-8");
-
-    const client = createAgentMailStub();
-    client.inboxes.messages.get.mockResolvedValue({
-      messageId: "orig-msg",
-      from: "ryan@example.net",
-      to: ["daniel@example.com", "avery@agentmail.test"],
-      cc: ["observer@example.com"],
-    });
-    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply" });
-
-    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, "abc123");
-    const result = await tool.execute("call-6", {
-      messageId: "orig-msg",
-      body: "Reply body",
-      replyAll: true,
-      cc: ["owner@example.com"],
-      bcc: ["audit@example.com"],
-      attachments: [{ path: "notes.txt", filename: "reply.txt", contentType: "text/plain" }],
-    });
-
-    expect(client.inboxes.messages.get).toHaveBeenCalledWith("avery@agentmail.test", "orig-msg");
-
-    const [, , payload] = client.inboxes.messages.reply.mock.calls[0];
-    expect(payload).toEqual(
-      expect.objectContaining({
-        text: "Reply body",
-        to: ["ryan@example.net"],
-        cc: ["daniel@example.com", "observer@example.com", "owner@example.com", "avery+abc123@agentmail.test"],
-        bcc: ["audit@example.com"],
-        attachments: [
-          expect.objectContaining({
-            filename: "reply.txt",
-            contentType: "text/plain",
-            content: Buffer.from("reply attachment", "utf-8").toString("base64"),
-          }),
-        ],
-      }),
-    );
-    expect(payload).not.toHaveProperty("replyAll");
-
-    expect(getText(result)).toContain("reply-all");
-    expect(getText(result)).toContain("1 attachment (reply.txt)");
-  });
-
-  it("uses the native replyAll flag for root task replies (no tag, no manual construction)", async () => {
+  it("uses the native replyAll flag for replies (no manual reconstruction)", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();
-    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply-root" });
+    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply", threadId: "thread-reply" });
 
     const tool = createReplyEmailTool("avery@agentmail.test", agentDir);
-    await tool.execute("call-root-reply", {
+    await tool.execute("call-reply-all", {
       messageId: "orig-msg",
-      body: "Root reply",
+      body: "Reply body",
       replyAll: true,
     });
 
@@ -297,104 +306,57 @@ describe("agentmail tools", () => {
       "avery@agentmail.test",
       "orig-msg",
       expect.objectContaining({
-        text: "Root reply",
+        text: "Reply body",
         replyAll: true,
       }),
     );
   });
 
-  it("falls back to original recipients when replying to own sent message (child task)", async () => {
+  it("manually reconstructs reply-all recipients when explicit cc is present", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();
     client.inboxes.messages.get.mockResolvedValue({
-      messageId: "orig-msg",
-      from: "avery+abc123@agentmail.test",
-      to: ["ryan@example.net", "daniel@example.com"],
-      cc: [],
+      from: "Sender Example <sender@example.com>",
+      to: ["Avery <avery@agentmail.test>", "Other Example <other@example.org>"],
+      cc: ["Existing Example <existing@example.net>"],
     });
-    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply-fallback" });
+    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply", threadId: "thread-reply" });
 
-    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, "abc123");
-    await tool.execute("call-self-from", {
+    const tool = createReplyEmailTool("avery@agentmail.test", agentDir);
+    await tool.execute("call-reply-all-cc", {
       messageId: "orig-msg",
-      body: "Bump",
+      body: "Reply body",
       replyAll: true,
+      cc: ["Owner Example <owner@example.com>"],
     });
 
-    const [, , payload] = client.inboxes.messages.reply.mock.calls[0];
-    expect(payload.to).toEqual(["ryan@example.net"]);
-    expect(payload.cc).toEqual(["daniel@example.com", "avery+abc123@agentmail.test"]);
-    expect(payload).not.toHaveProperty("replyAll");
+    expect(client.inboxes.messages.get).toHaveBeenCalledWith("avery@agentmail.test", "orig-msg");
+    expect(client.inboxes.messages.reply).toHaveBeenCalledWith(
+      "avery@agentmail.test",
+      "orig-msg",
+      expect.objectContaining({
+        text: "Reply body",
+        to: ["sender@example.com"],
+        cc: ["other@example.org", "existing@example.net", "owner@example.com"],
+      }),
+    );
+    const [, , replyParams] = client.inboxes.messages.reply.mock.calls[0];
+    expect(replyParams).not.toHaveProperty("replyAll");
   });
 
-  it("filters self addresses wrapped in display-name format during child task reply-all", async () => {
+  it("invokes the threadIdHook on a successful reply", async () => {
     const agentDir = createTempAgentDir();
     const client = createAgentMailStub();
-    client.inboxes.messages.get.mockResolvedValue({
+    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-r1", threadId: "thread-RRR" });
+
+    const hook = vi.fn();
+    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, undefined, hook);
+    await tool.execute("call-reply-hook", {
       messageId: "orig-msg",
-      from: "Avery Agent <avery+abc123@agentmail.test>",
-      to: [
-        "Ryan <ryan@example.net>",
-        "\"Avery\" <avery@agentmail.test>",
-      ],
-      cc: ["Daniel <daniel@example.com>"],
-    });
-    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply-display" });
-
-    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, "abc123");
-    await tool.execute("call-display-self", {
-      messageId: "orig-msg",
-      body: "Bump",
-      replyAll: true,
+      body: "Reply body",
     });
 
-    const [, , payload] = client.inboxes.messages.reply.mock.calls[0];
-    // Self "from" (display-name wrapped) must fall back to original recipients.
-    expect(payload.to).toEqual(["Ryan <ryan@example.net>"]);
-    // Self "to" entry (display-name wrapped) must be dropped; "daniel" stays; +tag appended.
-    expect(payload.cc).toEqual(["Daniel <daniel@example.com>", "avery+abc123@agentmail.test"]);
-    expect(payload).not.toHaveProperty("replyAll");
-  });
-
-  it("dedupes cc entries that repeat the to recipient in display-name format", async () => {
-    const agentDir = createTempAgentDir();
-    const client = createAgentMailStub();
-    client.inboxes.messages.get.mockResolvedValue({
-      messageId: "orig-msg",
-      from: "Ryan <ryan@example.net>",
-      to: [],
-      cc: ["ryan@example.net", "observer@example.com"],
-    });
-    client.inboxes.messages.reply.mockResolvedValue({ messageId: "msg-reply-dedup" });
-
-    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, "abc123");
-    await tool.execute("call-dedup", {
-      messageId: "orig-msg",
-      body: "hello",
-      replyAll: true,
-    });
-
-    const [, , payload] = client.inboxes.messages.reply.mock.calls[0];
-    expect(payload.to).toEqual(["Ryan <ryan@example.net>"]);
-    // "ryan@example.net" in the original cc must be dropped since the email already appears in to.
-    expect(payload.cc).toEqual(["observer@example.com", "avery+abc123@agentmail.test"]);
-  });
-
-  it("surfaces an error when reply-all cannot fetch the original message", async () => {
-    const agentDir = createTempAgentDir();
-    const client = createAgentMailStub();
-    client.inboxes.messages.get.mockRejectedValue(new Error("404 not found"));
-
-    const tool = createReplyEmailTool("avery@agentmail.test", agentDir, "abc123");
-    const result = await tool.execute("call-fetch-fail", {
-      messageId: "missing-msg",
-      body: "hi",
-      replyAll: true,
-    });
-
-    expect(client.inboxes.messages.reply).not.toHaveBeenCalled();
-    expect(result.details).toEqual({ error: true });
-    expect(getText(result)).toContain("could not fetch original message for reply-all");
+    expect(hook).toHaveBeenCalledWith("thread-RRR");
   });
 
   it("read_email exposes owner attachment metadata", async () => {
@@ -626,53 +588,5 @@ describe("agentmail tools", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(getText(result)).toContain("Path traversal not allowed");
     expect(result.details).toEqual({ error: true });
-  });
-
-  it("filters child task emails to tagged threads only", async () => {
-    createTempAgentDir();
-    const client = createAgentMailStub();
-    client.inboxes.threads.list.mockResolvedValue({
-      threads: [
-        {
-          threadId: "thread-1",
-          recipients: ["avery+abc123@agentmail.test"],
-          senders: ["owner@example.com"],
-        },
-        {
-          threadId: "thread-2",
-          recipients: ["avery@agentmail.test"],
-          senders: ["other@example.com"],
-        },
-      ],
-    });
-    client.inboxes.messages.list.mockResolvedValue({
-      messages: [
-        {
-          threadId: "thread-1",
-          from: "owner@example.com",
-          to: ["avery+abc123@agentmail.test"],
-          cc: [],
-          subject: "Tagged",
-          labels: ["received"],
-          messageId: "msg-1",
-        },
-        {
-          threadId: "thread-2",
-          from: "other@example.com",
-          to: ["avery@agentmail.test"],
-          cc: [],
-          subject: "Untagged",
-          labels: ["received"],
-          messageId: "msg-2",
-        },
-      ],
-    });
-
-    const tool = createFilteredReadEmailsTool("avery@agentmail.test", "abc123");
-    const result = await tool.execute("call-filtered", { limit: 10 });
-    const textResult = getText(result);
-
-    expect(textResult).toContain("Tagged");
-    expect(textResult).not.toContain("Untagged");
   });
 });

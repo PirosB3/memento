@@ -1,5 +1,13 @@
 import crypto from "crypto";
-import { SIGNAL_OWNER, publishTurnSnapshot, createLogger } from "@summon/shared";
+import {
+  SIGNAL_OWNER,
+  publishTurnSnapshot,
+  createLogger,
+  generateTaskSlug,
+  ensureUniqueSlug,
+  recordTaskThreadId,
+  withSlugRetry,
+} from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 
 const log = createLogger("web:task-services");
@@ -21,6 +29,8 @@ export interface PrepareTaskInput {
 
 export interface CreateTaskInput extends PrepareTaskInput {
   answers?: Record<string, string>;
+  seedThreadId?: string;
+  attachThreadId?: string;
 }
 
 export function buildEnrichedObjective(
@@ -112,16 +122,59 @@ export async function createTask(
   const taskId = crypto.randomUUID();
   const objective = buildEnrichedObjective(input.objective, input.answers);
 
-  const task = await deps.db.task.create({
-    data: {
-      taskId,
-      agentId: input.agentId,
-      tag: taskId,
-      objective,
-      status: "RUNNING",
-      isRoot: false,
+  const seedSlug = input.seedThreadId?.trim();
+  let initialSlug: string;
+  if (seedSlug) {
+    const collision = await deps.db.task.findFirst({
+      where: { agentId: input.agentId, slug: seedSlug },
+      select: { taskId: true },
+    });
+    if (collision) {
+      throw new Error(`Slug "${seedSlug}" is already in use by task ${collision.taskId}`);
+    }
+    initialSlug = seedSlug;
+  } else {
+    initialSlug = await ensureUniqueSlug(
+      deps.db,
+      input.agentId,
+      generateTaskSlug(objective, new Date()),
+    );
+  }
+  const agentmailThreadId = input.attachThreadId?.trim() || null;
+
+  // User-supplied `seed_thread_id` should NOT silently shift to a new value on
+  // race; let the unique-violation surface as the explicit error the caller
+  // already handles. Auto-generated slugs are safe to retry.
+  const task = await withSlugRetry(
+    (slug) => deps.db.$transaction(async (tx) => {
+      const createdTask = await tx.task.create({
+        data: {
+          taskId,
+          agentId: input.agentId,
+          tag: taskId,
+          slug,
+          objective,
+          status: "RUNNING",
+          isRoot: false,
+        },
+      });
+
+      if (agentmailThreadId) {
+        await recordTaskThreadId(tx, { taskId, agentmailThreadId });
+      }
+
+      return createdTask;
+    }),
+    initialSlug,
+    async () => {
+      if (seedSlug) throw new Error(`Slug "${seedSlug}" is already in use`);
+      return ensureUniqueSlug(
+        deps.db,
+        input.agentId,
+        generateTaskSlug(objective, new Date()),
+      );
     },
-  });
+  );
 
   try {
     const started = await deps.workflows.startTaskWorkflow({

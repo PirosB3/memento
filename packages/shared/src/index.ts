@@ -7,4 +7,21 @@ export type { Logger } from "./logger";
 export { getAgentsDir, getDatabaseUrl, getTemporalAddress, getWorkspaceRoot } from "./runtime";
 export { buildHtmlSignature, buildTextSignature } from "./signature";
 export type { AgentSignature } from "./signature";
+export {
+  generateTaskSlug,
+  ensureUniqueSlug,
+  isSlugUniqueViolation,
+  withSlugRetry,
+} from "./slug";
+export {
+  coerceAgentMailAddressList,
+  extractAgentMailThreadId,
+  extractBareEmailAddress,
+} from "./agentmail";
+export {
+  AgentMailThreadBindingConflictError,
+  recordTaskThreadId,
+  findTaskByAgentmailThreadId,
+  findTaskBySlug,
+} from "./task-threads";
 export * from "./types";

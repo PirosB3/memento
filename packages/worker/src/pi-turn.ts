@@ -1,6 +1,13 @@
 import { Agent } from "@mariozechner/pi-agent-core";
 import { getModel } from "@mariozechner/pi-ai";
-import { prisma, buildSystemPrompt, createLogger, getAgentsDir, publishTurnSnapshot } from "@summon/shared";
+import {
+  prisma,
+  buildSystemPrompt,
+  createLogger,
+  getAgentsDir,
+  publishTurnSnapshot,
+  recordTaskThreadId,
+} from "@summon/shared";
 import type { AgentSignature, DecisionResult, PendingMessage } from "@summon/shared";
 import type { AgentMessage } from "../pi-types.js";
 import { uuidv7 } from "uuidv7";
@@ -15,9 +22,7 @@ import {
   createReadEmailTool,
   createDownloadEmailAttachmentTool,
   createReadEmailsTool,
-  createFilteredReadEmailsTool,
   createListThreadsTool,
-  createFilteredListThreadsTool,
 } from "./tools/agentmail-tools.js";
 import { createBashTool } from "./tools/bash-tool.js";
 import { createReadFileTool, createWriteFileTool } from "./tools/file-tools.js";
@@ -30,6 +35,7 @@ import {
   createGetTaskConversationTool,
   createAgentConfigTool,
 } from "./tools/task-management-tools.js";
+import { createRouteEmailToThreadTool } from "./tools/route-email-to-thread.js";
 import {
   createCreateScheduleTool,
   createListSchedulesTool,
@@ -103,7 +109,10 @@ export async function runPiAgentTurnImpl(
 
   // Build the email signature block from agent profile fields (null-safe — if the
   // agent pre-dates the feature and has no signature fields, outgoing emails remain
-  // unsigned).
+  // unsigned). The `threadRef` line at the bottom of the signature is "root"
+  // for root tasks and the per-task slug for child tasks; it gives operators a
+  // visible handle in outgoing mail.
+  const threadRef = isRoot ? "root" : task.slug ?? task.tag;
   const signature: AgentSignature | null = agent.signatureDisplayName
     ? {
         displayName: agent.signatureDisplayName,
@@ -111,25 +120,41 @@ export async function runPiAgentTurnImpl(
         profileImageUrl: agent.profileImageUrl ?? null,
         companyName: process.env.COMPANY_NAME?.trim() || null,
         companyWebsite: process.env.COMPANY_WEBSITE?.trim() || null,
+        threadRef,
       }
     : null;
+
+  // Hook invoked after every successful send/reply: bind the resulting AgentMail
+  // threadId to this task so future inbound mail in this thread routes back here.
+  // Root never owns conversation threads — only children record threadIds.
+  const threadIdHook = isRoot
+    ? undefined
+    : async (agentmailThreadId: string) => {
+        try {
+          await recordTaskThreadId(prisma, { taskId: task.taskId, agentmailThreadId });
+        } catch (err) {
+          taskLog.warn(`recordTaskThreadId failed for thread ${agentmailThreadId}: ${String(err)}`);
+        }
+      };
 
   // 7. Build tools based on root vs child
   const tools = isRoot
     ? [
-        // Root: unfiltered email tools, base address
-        createSendEmailTool(agent.agentEmail, agentDir, undefined, signature),
-        createReplyEmailTool(agent.agentEmail, agentDir, undefined, signature),
+        // Root: unfiltered email tools, base address. No threadIdHook — root
+        // doesn't own a single conversation thread.
+        createSendEmailTool(agent.agentEmail, agentDir, signature),
+        createReplyEmailTool(agent.agentEmail, agentDir, signature),
         createReadEmailTool(agent.agentEmail, agent.ownerEmail),
         createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
         createReadEmailsTool(agent.agentEmail),
         createListThreadsTool(agent.agentEmail),
         // Root: task management tools
-        createSpawnTaskTool(agent.agentId, agent.agentEmail),
+        createSpawnTaskTool(agent.agentId),
         createWakeTaskTool(),
         createCancelTaskTool(),
         createListTasksTool(agent.agentId),
         createGetTaskConversationTool(),
+        createRouteEmailToThreadTool(agent.agentId, agent.agentEmail, agent.ownerEmail),
         createAgentConfigTool(agent.agentId),
         // Schedule tools
         createCreateScheduleTool(task.taskId, agent.agentId, true),
@@ -142,13 +167,15 @@ export async function runPiAgentTurnImpl(
         createDecideTool((d) => { capturedDecision = d; }, { isRoot: true }),
       ]
     : [
-        // Child: filtered email tools, +tag address
-        createSendEmailTool(agent.agentEmail, agentDir, task.tag, signature),
-        createReplyEmailTool(agent.agentEmail, agentDir, task.tag, signature),
+        // Child: unfiltered email tools, base address. threadIdHook records
+        // the AgentMail threadId of every outbound mail in the bridge table so
+        // inbound replies route back to it.
+        createSendEmailTool(agent.agentEmail, agentDir, signature, threadIdHook),
+        createReplyEmailTool(agent.agentEmail, agentDir, signature, threadIdHook),
         createReadEmailTool(agent.agentEmail, agent.ownerEmail),
         createDownloadEmailAttachmentTool(agent.agentEmail, agent.ownerEmail, agentDir),
-        createFilteredReadEmailsTool(agent.agentEmail, task.tag),
-        createFilteredListThreadsTool(agent.agentEmail, task.tag),
+        createReadEmailsTool(agent.agentEmail),
+        createListThreadsTool(agent.agentEmail),
         // Schedule tools
         createCreateScheduleTool(task.taskId, agent.agentId, false),
         createListSchedulesTool(task.taskId, agent.agentId, false),

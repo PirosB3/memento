@@ -4,6 +4,12 @@ export interface AgentSignature {
   profileImageUrl: string | null;
   companyName?: string | null;
   companyWebsite?: string | null;
+  /**
+   * Thread handle rendered as a small `ref: <slug>` line at the very bottom of
+   * the signature. Used for operator debugging — recipients can ignore it.
+   * `"root"` for the root task, the per-task slug for child tasks.
+   */
+  threadRef?: string | null;
 }
 
 function escapeHtml(value: string): string {
@@ -33,7 +39,9 @@ export function buildTextSignature(signature: AgentSignature): string {
   if (signature.companyWebsite?.trim()) {
     lines.push(`w  ${stripProtocol(signature.companyWebsite.trim())}`);
   }
-  return `\n\n-- \n${lines.join("\n")}\n`;
+  const ref = signature.threadRef?.trim();
+  const refLine = ref ? `\nref: ${ref}\n` : "";
+  return `\n\n-- \n${lines.join("\n")}\n${refLine}`;
 }
 
 export function buildHtmlSignature(signature: AgentSignature): string {
@@ -60,11 +68,17 @@ export function buildHtmlSignature(signature: AgentSignature): string {
       `</div>`
     : "";
 
+  const ref = signature.threadRef?.trim();
+  const refHtml = ref
+    ? `<div style="color:#9ca3af;font-size:11px;margin-top:6px;">ref: ${escapeHtml(ref)}</div>`
+    : "";
+
   const textCell =
     `<td style="vertical-align:top;font-family:Arial,Helvetica,sans-serif;">` +
     `<div style="color:#111;font-size:18px;font-weight:700;line-height:1.2;">${name}</div>` +
     subtitleHtml +
     websiteHtml +
+    refHtml +
     `</td>`;
 
   return (
