@@ -1,5 +1,5 @@
 /**
- * One-shot migration: backfill `tasks.slug` and `tasks.agentmail_thread_ids`
+ * One-shot migration: backfill `tasks.slug` and `agentmail_thread_bindings`
  * for legacy child tasks that were created when routing relied on `+tag`
  * recipients. After this script runs, the new threadId-based gateway routing
  * works end-to-end for existing tasks too.
@@ -10,13 +10,13 @@
  *      addresses involved in any of its messages.
  *   3. For each child task whose `tag` (the task UUID, also the legacy +tag
  *      slug) appears as `<local>+<tag>@<domain>` in any thread's recipients,
- *      record those AgentMail thread IDs against the task.
- *   4. Generate a slug from the task's objective + createdAt and write both
- *      `slug` and `agentmail_thread_ids` to the task row.
+ *      record those AgentMail thread IDs in the bridge table.
+ *   4. Generate a slug from the task's objective + createdAt and write it to
+ *      the task row.
  *
- * Tasks without any matching AgentMail threads still get a slug (and an
- * empty thread-id array) so subsequent outbound mail records its threadId
- * via the live `recordTaskThreadId` hook.
+ * Tasks without any matching AgentMail threads still get a slug and no bridge
+ * rows; subsequent outbound mail records its threadId via the live
+ * `recordTaskThreadId` hook.
  *
  * Run order: dev → test → prod. Use `--dry-run` to inspect without writing.
  *
@@ -37,6 +37,7 @@ import {
   createLogger,
   generateTaskSlug,
   ensureUniqueSlug,
+  recordTaskThreadId,
 } from "@summon/shared";
 
 const log = createLogger("migrate-tags-to-threads");
@@ -125,20 +126,21 @@ async function migrateAgent(
       slug = await ensureUniqueSlug(prisma, agent.agentId, generateTaskSlug(task.objective, task.createdAt));
     }
 
-    const existingIds = new Set(task.agentmailThreadIds ?? []);
-    for (const id of matchedThreadIds) existingIds.add(id);
-    const finalIds = [...existingIds];
-
     log.info(
       `[${agent.agentId}] task=${task.taskId} tag=${task.tag} slug=${slug} `
-        + `legacy_match=${matchedThreadIds.length} final_threads=${finalIds.length}`,
+        + `legacy_match=${matchedThreadIds.length}`,
     );
 
     if (DRY_RUN) continue;
 
-    await prisma.task.update({
-      where: { taskId: task.taskId },
-      data: { slug, agentmailThreadIds: finalIds },
+    await prisma.$transaction(async (tx) => {
+      await tx.task.update({
+        where: { taskId: task.taskId },
+        data: { slug },
+      });
+      for (const agentmailThreadId of matchedThreadIds) {
+        await recordTaskThreadId(tx, { taskId: task.taskId, agentmailThreadId });
+      }
     });
   }
 }
