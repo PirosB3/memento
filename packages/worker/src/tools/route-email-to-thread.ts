@@ -9,6 +9,8 @@ import {
   findTaskBySlug,
   SIGNAL_EMAIL,
   SIGNAL_OWNER,
+  extractAgentMailThreadId,
+  extractBareEmailAddress,
 } from "@summon/shared";
 import { uuidv7 } from "uuidv7";
 import { Client, Connection } from "@temporalio/client";
@@ -36,14 +38,6 @@ function getAgentmailClient() {
 
 export function setAgentMailClientForTests(client: typeof agentmailClient): void {
   agentmailClient = client;
-}
-
-function normalizeAddress(raw: string | undefined | null): string {
-  if (!raw) return "";
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const match = trimmed.match(/<([^>]+)>/);
-  return (match?.[1] ?? trimmed).trim().toLowerCase();
 }
 
 /**
@@ -96,7 +90,7 @@ export function createRouteEmailToThreadTool(
           };
         }
 
-        const threadId = (msg.threadId ?? msg.thread_id) as string | undefined;
+        const threadId = extractAgentMailThreadId(msg);
         if (!threadId) {
           return {
             content: [{ type: "text" as const, text: `Message ${message_id} has no threadId — cannot route.` }],
@@ -125,7 +119,7 @@ export function createRouteEmailToThreadTool(
           throw err;
         }
 
-        const senderEmail = normalizeAddress(msg.from as string | undefined);
+        const senderEmail = extractBareEmailAddress(msg.from as string | undefined);
         const isOwner = senderEmail === ownerEmail.toLowerCase();
         const signalName = isOwner ? SIGNAL_OWNER : SIGNAL_EMAIL;
 

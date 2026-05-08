@@ -54,6 +54,22 @@ vi.mock("@summon/shared", () => ({
   findTaskByAgentmailThreadId: findTaskByAgentmailThreadIdMock,
   recordTaskThreadId: recordTaskThreadIdMock,
   AgentMailThreadBindingConflictError: MockAgentMailThreadBindingConflictError,
+  coerceAgentMailAddressList: (raw: unknown) => {
+    if (Array.isArray(raw)) return raw.map(String);
+    if (typeof raw === "string") return [raw];
+    return [];
+  },
+  extractAgentMailThreadId: (msg: Record<string, unknown>) => {
+    const threadId = msg.threadId ?? msg.thread_id;
+    return typeof threadId === "string" && threadId.trim() ? threadId.trim() : null;
+  },
+  extractBareEmailAddress: (raw: string | undefined | null) => {
+    if (!raw) return "";
+    const trimmed = raw.trim();
+    if (!trimmed) return "";
+    const match = trimmed.match(/<([^>]+)>/);
+    return (match?.[1] ?? trimmed).trim().toLowerCase();
+  },
 }));
 
 import {

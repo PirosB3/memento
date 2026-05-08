@@ -2,7 +2,13 @@ import { Type } from "@sinclair/typebox";
 import { AgentMailClient } from "agentmail";
 import fs from "fs";
 import path from "path";
-import { buildHtmlSignature, buildTextSignature } from "@summon/shared";
+import {
+  buildHtmlSignature,
+  buildTextSignature,
+  coerceAgentMailAddressList,
+  extractAgentMailThreadId,
+  extractBareEmailAddress,
+} from "@summon/shared";
 import type { AgentSignature } from "@summon/shared";
 import type { AgentTool } from "../../pi-types.js";
 import { resolveAuthorizedPath } from "./file-tools.js";
@@ -114,11 +120,6 @@ export function setAgentMailClientForTests(client: AgentMailLike | null): void {
  */
 export type ThreadIdHook = (agentmailThreadId: string) => Promise<void> | void;
 
-function extractThreadIdFromSendResult(result: Record<string, unknown>): string | null {
-  const raw = (result.threadId ?? result.thread_id) as unknown;
-  return typeof raw === "string" && raw.trim() ? raw.trim() : null;
-}
-
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -144,27 +145,8 @@ function normalizeAddressList(value: string | string[] | undefined): string[] {
   return normalized;
 }
 
-function coerceAddressList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String);
-  if (typeof value === "string") return [value];
-  return [];
-}
-
 function normalizeSenderEmail(rawFrom: unknown): string | null {
-  if (typeof rawFrom !== "string") {
-    return null;
-  }
-
-  const trimmed = rawFrom.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const extracted = trimmed.includes("<")
-    ? trimmed.match(/<(.+)>/)?.[1] ?? trimmed
-    : trimmed;
-
-  const normalized = extracted.trim().toLowerCase();
+  const normalized = typeof rawFrom === "string" ? extractBareEmailAddress(rawFrom) : "";
   return normalized || null;
 }
 
@@ -191,10 +173,10 @@ function applyManualReplyAllRecipients(
   const seen = new Set<string>();
 
   pushUniqueAddress(to, seen, originalMessage.from, agentEmail);
-  for (const recipient of coerceAddressList(originalMessage.to)) {
+  for (const recipient of coerceAgentMailAddressList(originalMessage.to)) {
     pushUniqueAddress(cc, seen, recipient, agentEmail);
   }
-  for (const recipient of coerceAddressList(originalMessage.cc)) {
+  for (const recipient of coerceAgentMailAddressList(originalMessage.cc)) {
     pushUniqueAddress(cc, seen, recipient, agentEmail);
   }
   for (const recipient of explicitCc) {
@@ -463,6 +445,38 @@ function extractDownloadValue<T extends string | number>(
   return value;
 }
 
+function extractMessageId(result: Record<string, unknown>): string | undefined {
+  const raw = result.messageId ?? result.message_id;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+async function resolveAndRecordThreadId(
+  agentmail: AgentMailLike,
+  inboxId: string,
+  result: Record<string, unknown>,
+  threadIdHook?: ThreadIdHook,
+): Promise<{ messageId: string | undefined; threadId: string | null }> {
+  const messageId = extractMessageId(result);
+  let threadId = extractAgentMailThreadId(result);
+
+  // AgentMail's send/reply responses sometimes omit threadId; fall back to a
+  // get() only when there is a hook waiting to persist the binding.
+  if (!threadId && threadIdHook && messageId) {
+    try {
+      const fetched = await agentmail.inboxes.messages.get(inboxId, messageId) as Record<string, unknown>;
+      threadId = extractAgentMailThreadId(fetched);
+    } catch {
+      // best-effort
+    }
+  }
+
+  if (threadId && threadIdHook) {
+    await threadIdHook(threadId);
+  }
+
+  return { messageId, threadId };
+}
+
 // ============================================================================
 // SEND EMAIL — sends from the agent's bare base address; threadId from the
 // AgentMail response is recorded on the task so future inbound mail in this
@@ -500,21 +514,7 @@ export function createSendEmailTool(
         const agentmail = getAgentMailClient();
         const sendParams = buildEmailPayload(p, { mode: "send", agentDir, signature });
         const result = await agentmail.inboxes.messages.send(inboxId, sendParams) as Record<string, unknown>;
-        const messageId = (result.messageId ?? result.message_id) as string | undefined;
-        let threadId = extractThreadIdFromSendResult(result);
-        // AgentMail's send response sometimes omits threadId; fall back to a
-        // get() to retrieve it so we can bind this thread to the task.
-        if (!threadId && threadIdHook && messageId) {
-          try {
-            const fetched = await agentmail.inboxes.messages.get(inboxId, messageId) as Record<string, unknown>;
-            threadId = extractThreadIdFromSendResult(fetched);
-          } catch {
-            // best-effort
-          }
-        }
-        if (threadId && threadIdHook) {
-          await threadIdHook(threadId);
-        }
+        const { messageId, threadId } = await resolveAndRecordThreadId(agentmail, inboxId, result, threadIdHook);
         const toList = normalizeAddressList(p.to);
         const ccList = normalizeAddressList(sendParams.cc as string[] | undefined);
         const bccList = normalizeAddressList(sendParams.bcc as string[] | undefined);
@@ -581,19 +581,7 @@ export function createReplyEmailTool(
         }
 
         const result = await agentmail.inboxes.messages.reply(inboxId, p.messageId, replyParams) as Record<string, unknown>;
-        const messageId = (result.messageId ?? result.message_id) as string | undefined;
-        let threadId = extractThreadIdFromSendResult(result);
-        if (!threadId && threadIdHook && messageId) {
-          try {
-            const fetched = await agentmail.inboxes.messages.get(inboxId, messageId) as Record<string, unknown>;
-            threadId = extractThreadIdFromSendResult(fetched);
-          } catch {
-            // best-effort
-          }
-        }
-        if (threadId && threadIdHook) {
-          await threadIdHook(threadId);
-        }
+        const { messageId, threadId } = await resolveAndRecordThreadId(agentmail, inboxId, result, threadIdHook);
         const ccList = normalizeAddressList(replyParams.cc as string[] | undefined);
         const bccList = normalizeAddressList(replyParams.bcc as string[] | undefined);
         const recipientParts = [];
@@ -643,6 +631,7 @@ export function createReadEmailTool(agentEmail: string, ownerEmail: string): Age
         const agentmail = getAgentMailClient();
         const msg = await agentmail.inboxes.messages.get(inboxId, p.messageId) as Record<string, unknown>;
         const body = (msg.extractedText ?? msg.text ?? "") as string;
+        const threadId = extractAgentMailThreadId(msg);
         const attachmentAccess = getAttachmentAccess(msg, ownerEmail);
         const formatted = [
           `From: ${msg.from ?? "unknown"}`,
@@ -650,7 +639,7 @@ export function createReadEmailTool(agentEmail: string, ownerEmail: string): Age
           msg.cc ? `CC: ${JSON.stringify(msg.cc)}` : null,
           `Subject: ${msg.subject ?? "(no subject)"}`,
           `Date: ${msg.createdAt ?? msg.timestamp ?? "unknown"}`,
-          `Thread: ${msg.threadId ?? msg.thread_id ?? "none"}`,
+          `Thread: ${threadId ?? "none"}`,
           `Message ID: ${msg.messageId ?? msg.message_id ?? p.messageId}`,
           ...formatAttachmentSection(attachmentAccess),
           "",
@@ -660,7 +649,7 @@ export function createReadEmailTool(agentEmail: string, ownerEmail: string): Age
           content: [{ type: "text" as const, text: formatted }],
           details: {
             messageId: p.messageId,
-            threadId: msg.threadId ?? msg.thread_id,
+            threadId,
             attachments: buildAttachmentDetails(attachmentAccess),
           },
         };

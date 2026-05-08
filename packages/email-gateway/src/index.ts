@@ -16,6 +16,9 @@ import {
   findTaskByAgentmailThreadId,
   recordTaskThreadId,
   AgentMailThreadBindingConflictError,
+  coerceAgentMailAddressList,
+  extractAgentMailThreadId,
+  extractBareEmailAddress,
 } from "@summon/shared";
 import type { InboundEmail } from "@summon/shared";
 
@@ -112,11 +115,7 @@ export function isSelfSentEmail(fromField: string, agentEmail: string): boolean 
  * surrounding whitespace. Returns "" for empty/undefined input.
  */
 export function extractBareAddress(raw: string | undefined | null): string {
-  if (!raw) return "";
-  const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const match = trimmed.match(/<([^>]+)>/);
-  return (match?.[1] ?? trimmed).trim().toLowerCase();
+  return extractBareEmailAddress(raw);
 }
 
 /**
@@ -142,8 +141,8 @@ export function collectOutboundRecipients(
   const taggedPrefix = `${local}+`;
   const taggedSuffix = `@${domain}`;
 
-  const to = coerceAddressList(msg.to);
-  const cc = coerceAddressList(msg.cc);
+  const to = coerceAgentMailAddressList(msg.to);
+  const cc = coerceAgentMailAddressList(msg.cc);
 
   for (const raw of [...to, ...cc]) {
     const email = extractBareAddress(raw);
@@ -258,23 +257,12 @@ async function collectPendingMessages(
       timestamp,
       senderEmail,
       isOwner: senderEmail === agent.ownerEmail.toLowerCase(),
-      agentmailThreadId: extractAgentmailThreadId(msg),
+      agentmailThreadId: extractAgentMailThreadId(msg),
       legacyTag: extractLegacyTagFromRecipients(msg, agent.agentEmail),
     });
   }
 
   return pending;
-}
-
-function coerceAddressList(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map(String);
-  if (typeof raw === "string") return [raw];
-  return [];
-}
-
-function extractAgentmailThreadId(msg: Record<string, unknown>): string | null {
-  const threadId = msg.threadId ?? msg.thread_id;
-  return typeof threadId === "string" && threadId.trim() ? threadId.trim() : null;
 }
 
 export function extractLegacyTagFromRecipients(
@@ -288,8 +276,8 @@ export function extractLegacyTagFromRecipients(
   const domain = agentEmail.slice(atIndex + 1).toLowerCase();
   const legacyPrefix = `${baseLocal}+`;
   const candidates = [
-    ...coerceAddressList(msg.to),
-    ...coerceAddressList(msg.cc),
+    ...coerceAgentMailAddressList(msg.to),
+    ...coerceAgentMailAddressList(msg.cc),
   ];
 
   for (const candidate of candidates) {
