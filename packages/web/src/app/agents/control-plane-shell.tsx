@@ -818,13 +818,11 @@ export default function ControlPlaneShell({
                   </h2>
                   <StatusPill status={getDisplayedTaskStatus(selectedTask.detail)} />
                 </div>
-                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
-                  <span>{selectedAgent.name}</span>
-                  <span className="inline-flex min-w-0 items-center gap-1.5">
-                    <span className="truncate font-mono">{selectedTask.email}</span>
-                    <CopyEmailButton value={selectedTask.email} />
-                  </span>
-                  <span>{selectedTask.detail.conversations.length} messages</span>
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
+                  <span className="leading-none">{selectedAgent.name}</span>
+                  <span className="min-w-0 truncate font-mono leading-none">{selectedTask.email}</span>
+                  <CopyEmailButton value={selectedTask.email} />
+                  <span className="leading-none">{selectedTask.detail.conversations.length} messages</span>
                 </div>
               </div>
             </header>
