@@ -4,13 +4,11 @@ import {
   createLogger,
   TASK_QUEUE,
   getTemporalAddress,
-  publishTurnSnapshot,
   generateTaskSlug,
   ensureUniqueSlug,
   recordTaskThreadId,
   withSlugRetry,
 } from "@summon/shared";
-import { uuidv7 } from "uuidv7";
 import type { AgentTool } from "../../pi-types.js";
 import { Client, Connection } from "@temporalio/client";
 import crypto from "crypto";
@@ -160,27 +158,7 @@ export function createWakeTaskTool(): AgentTool {
 
         log.info(`Waking task: ${taskId} (status=${task.status})`, { message });
 
-        // Insert message into child's conversation
-        await prisma.conversation.create({
-          data: {
-            taskId,
-            role: "user",
-            message: JSON.stringify({
-              role: "user",
-              content: `## INLINE ROOT TASK MESSAGE
-Source: root task wake
-
-${message}`,
-              timestamp: Date.now(),
-            }),
-            orderingKey: uuidv7(),
-          },
-        });
-        await publishTurnSnapshot(taskId, []).catch((err) => {
-          log.warn(`publishTurnSnapshot after wake_task tool failed: ${String(err)}`);
-        });
-
-        // Signal the child workflow
+        // Signal only — the workflow builds the wake prompt via insertPromptMessagesForTurn.
         const temporal = await getTemporalClient();
         const handle = temporal.workflow.getHandle(`task-${taskId}`);
         await handle.signal(

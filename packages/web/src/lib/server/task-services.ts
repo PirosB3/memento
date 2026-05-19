@@ -279,7 +279,6 @@ export async function wakeRootTask(
     throw new Error("Workflow is stopped. Restart it first.");
   }
 
-  await insertImmediateWakeMessage(rootTask.taskId, buildDirectOwnerWakeMessage(trimmedMessage), deps);
   await deps.workflows.signalWorkflow(
     `agent__${agentId}__root`,
     SIGNAL_OWNER,
@@ -308,7 +307,6 @@ export async function wakeTask(
     throw new Error("Workflow is stopped. Restart it first.");
   }
 
-  await insertImmediateWakeMessage(taskId, buildDirectOwnerWakeMessage(trimmedMessage), deps);
   await deps.workflows.signalWorkflow(
     `task-${taskId}`,
     SIGNAL_OWNER,
