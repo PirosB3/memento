@@ -49,6 +49,12 @@ import {
 } from "./skill-manifest.js";
 import fs from "fs";
 import path from "path";
+import {
+  finalizePiTurnDecision,
+  loadMaxConversationId,
+  loadPiTurnResumeDecision,
+  markPiTurnProgress,
+} from "./pi-turn-idempotency.js";
 
 const AGENTS_DIR = getAgentsDir();
 const log = createLogger("pi-turn");
@@ -127,10 +133,19 @@ export function compactImagesForStorage(msg: AgentMessage): AgentMessage {
 
 export async function runPiAgentTurnImpl(
   taskId: string,
-  _turnLogId: number,
+  turnLogId: number,
 ): Promise<DecisionResult> {
   const taskLog = log.child(`task:${taskId}`);
   taskLog.info("Starting Pi agent turn");
+
+  const resumedDecision = await loadPiTurnResumeDecision(taskId, turnLogId);
+  if (resumedDecision) {
+    taskLog.info("Skipping Pi agent turn — output already persisted for this turn log");
+    return resumedDecision;
+  }
+
+  const conversationWatermark = await loadMaxConversationId(taskId);
+  await markPiTurnProgress(turnLogId, conversationWatermark);
 
   // 1. Load task and agent from DB
   const task = await prisma.task.findUniqueOrThrow({ where: { taskId } });
@@ -535,6 +550,7 @@ export async function runPiAgentTurnImpl(
     stopReason: "No explicit decision was made. Defaulting to sleep.",
     sleepDurationMs: 24 * 60 * 60 * 1000,
   };
+  await finalizePiTurnDecision(turnLogId, finalDecision);
   taskLog.info(`Turn decision: ${finalDecision.type}`, { decision: finalDecision });
   return finalDecision;
 }
