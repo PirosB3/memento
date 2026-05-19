@@ -17,6 +17,7 @@ export {
   coerceAgentMailAddressList,
   extractAgentMailThreadId,
   extractBareEmailAddress,
+  isAgentSelfEmail,
 } from "./agentmail";
 export {
   AgentMailThreadBindingConflictError,
