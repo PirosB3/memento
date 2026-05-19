@@ -351,27 +351,7 @@ export async function wakeTask(
   }
   log.info(`Waking task: ${taskId} (status=${task.status})`, { message });
 
-  // Insert the message into the child's conversation
-  await prisma.conversation.create({
-    data: {
-      taskId,
-      role: "user",
-      message: JSON.stringify({
-        role: "user",
-        content: `## INLINE ROOT TASK MESSAGE
-Source: root task wake
-
-${message}`,
-        timestamp: Date.now(),
-      }),
-      orderingKey: uuidv7(),
-    },
-  });
-  await publishTurnSnapshot(taskId, []).catch((err) => {
-    log.warn(`publishTurnSnapshot after wakeTask failed: ${String(err)}`);
-  });
-
-  // Signal the child workflow to wake
+  // Signal only — the workflow builds the wake prompt via insertPromptMessagesForTurn.
   const temporal = await getTemporalClient();
   const handle = temporal.workflow.getHandle(`task-${taskId}`);
   await handle.signal("on_owner_response", `inline:${JSON.stringify({ source: "root_task", message })}`);

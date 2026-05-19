@@ -407,7 +407,7 @@ describe("task services", () => {
     expect(workflows.startTaskWorkflow).toHaveBeenCalled();
   });
 
-  it("signals direct owner wakes with structured inline payloads", async () => {
+  it("signals direct owner wakes without inserting duplicate conversation rows", async () => {
     const workflows = {
       startTaskWorkflow: vi.fn(),
       terminateWorkflow: vi.fn(),
@@ -448,14 +448,7 @@ describe("task services", () => {
 
     await wakeRootTask("agent-1", "Please follow up today", deps);
 
-    expect(db.conversation.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          taskId: "task-root",
-          message: expect.stringContaining("## INLINE OWNER MESSAGE"),
-        }),
-      }),
-    );
+    expect(db.conversation.create).not.toHaveBeenCalled();
     expect(workflows.signalWorkflow).toHaveBeenCalledWith(
       "agent__agent-1__root",
       "on_owner_response",
