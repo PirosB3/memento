@@ -25,7 +25,8 @@ import {
   createListThreadsTool,
 } from "./tools/agentmail-tools.js";
 import { createBashTool } from "./tools/bash-tool.js";
-import { createReadFileTool, createWriteFileTool } from "./tools/file-tools.js";
+import { createReadFileTool, createWriteFileTool, resolveAuthorizedPath } from "./tools/file-tools.js";
+import { createViewImageTool } from "./tools/view-image-tool.js";
 import { createDecideTool } from "./tools/decide-tool.js";
 import {
   createSpawnTaskTool,
@@ -51,6 +52,78 @@ import path from "path";
 
 const AGENTS_DIR = getAgentsDir();
 const log = createLogger("pi-turn");
+
+type ContentBlock = { type: string; [key: string]: unknown };
+
+// Walk message content looking for image_ref markers (compact persistence form)
+// and convert each into a real Pi `image` block by reading the file off disk
+// and base64-encoding it. Missing files degrade to a text marker so old
+// conversations still load. Mutates the messages array in place.
+export function rehydrateImageRefs(
+  messages: AgentMessage[],
+  agentDir: string,
+  taskLog: ReturnType<typeof log.child>,
+): void {
+  for (const msg of messages) {
+    const content = (msg as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    const arr = content as ContentBlock[];
+    for (let i = 0; i < arr.length; i++) {
+      const block = arr[i];
+      if (block.type !== "image_ref") continue;
+      const refPath = typeof block.path === "string" ? block.path : null;
+      const mimeType = typeof block.mimeType === "string" ? block.mimeType : null;
+      if (!refPath || !mimeType) {
+        arr[i] = { type: "text", text: "[image reference is malformed]" };
+        continue;
+      }
+      const resolved = resolveAuthorizedPath(agentDir, refPath, "read");
+      if (!resolved.path) {
+        taskLog.warn(`rehydrateImageRefs: path rejected for ${refPath}: ${resolved.error}`);
+        arr[i] = { type: "text", text: `[image at ${refPath} is no longer available]` };
+        continue;
+      }
+      try {
+        const bytes = fs.readFileSync(resolved.path);
+        arr[i] = {
+          type: "image",
+          data: bytes.toString("base64"),
+          mimeType,
+          path: refPath,
+          size: bytes.length,
+        };
+      } catch (err) {
+        taskLog.warn(`rehydrateImageRefs: failed to read ${refPath}: ${String(err)}`);
+        arr[i] = { type: "text", text: `[image at ${refPath} is no longer available]` };
+      }
+    }
+  }
+}
+
+// Inverse of rehydrateImageRefs: before persisting a message to the DB, swap
+// any disk-backed image blocks (recognized by the presence of `path`) for the
+// compact `image_ref` form. The base64 bytes stay only in transient state and
+// out of Postgres rows. Returns a new message; the input is not mutated.
+export function compactImagesForStorage(msg: AgentMessage): AgentMessage {
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) return msg;
+  const arr = content as ContentBlock[];
+  let changed = false;
+  const next = arr.map((block) => {
+    if (block.type === "image" && typeof block.path === "string") {
+      changed = true;
+      return {
+        type: "image_ref",
+        path: block.path,
+        mimeType: block.mimeType,
+        size: block.size,
+      };
+    }
+    return block;
+  });
+  if (!changed) return msg;
+  return { ...(msg as object), content: next } as unknown as AgentMessage;
+}
 
 export async function runPiAgentTurnImpl(
   taskId: string,
@@ -82,6 +155,11 @@ export async function runPiAgentTurnImpl(
   // 4. Ensure agent workspace exists
   const agentDir = path.join(AGENTS_DIR, agent.agentId);
   fs.mkdirSync(agentDir, { recursive: true });
+
+  // 4a. Rehydrate compact image_ref markers into real Pi image blocks by
+  // reading the bytes from disk. This must happen before token estimation
+  // and before the Agent constructor reads `state.messages`.
+  rehydrateImageRefs(messages, agentDir, taskLog);
 
   // Symlink shared/ into the agent workspace so every agent has access to shared skills.
   // Target is relative to the directory containing the symlink: ../../shared resolves from
@@ -164,6 +242,7 @@ export async function runPiAgentTurnImpl(
         createBashTool(agentDir),
         createReadFileTool(agentDir),
         createWriteFileTool(agentDir),
+        createViewImageTool(agentDir),
         createDecideTool((d) => { capturedDecision = d; }, { isRoot: true }),
       ]
     : [
@@ -184,6 +263,7 @@ export async function runPiAgentTurnImpl(
         createBashTool(agentDir),
         createReadFileTool(agentDir),
         createWriteFileTool(agentDir),
+        createViewImageTool(agentDir),
         createDecideTool((d) => { capturedDecision = d; }, {
           todoFilePath: path.join(agentDir, "tasks", task.tag, "todo.md"),
         }),
@@ -424,7 +504,10 @@ export async function runPiAgentTurnImpl(
       data: newMessages.map((msg) => ({
         taskId,
         role: msg.role,
-        message: JSON.stringify(msg),
+        // Compact disk-backed image blocks down to image_ref markers so the
+        // base64 payload doesn't bloat the conversations row. Each turn
+        // rehydrates from disk via rehydrateImageRefs at load time.
+        message: JSON.stringify(compactImagesForStorage(msg)),
         // Use the buffered ordering key when available. Defensive fallback: if
         // a message somehow appeared in state.messages without a corresponding
         // message_start event (shouldn't happen), mint one now.

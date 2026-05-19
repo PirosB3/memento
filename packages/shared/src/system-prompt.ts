@@ -69,8 +69,10 @@ Match the wake channel (see WAKE CHANNEL in the latest wake message):
 The reply-channel rule applies to acknowledging the wake. You may still email participants (or others) when the underlying task work calls for it.
 
 ## IMAGE HANDLING
-- If OPENAI_API_KEY is available in the shell, you may use it from bash for image analysis or generation.
-- Save generated images under generated/.
+- To analyze an image already on disk, call \`view_image(path)\`. The image becomes visible to you on the same turn.
+- For owner-sent email attachments: first save with \`download_email_attachment\`, then call \`view_image\` on the saved path.
+- Supported formats: png, jpg, jpeg, gif, webp. Limit 10MB per file.
+- Save any generated images under generated/.
 
 ## TASK MANAGEMENT
 - Use \`spawn_task(objective)\` to create child tasks. You can optionally pass \`seed_thread_id\` (a preferred slug, must be unique per agent) and \`attach_threadId\` (an AgentMail threadId to immediately bind to the new task — useful when triaging an inbound email directly into a fresh task).
@@ -193,8 +195,10 @@ Match the wake channel (see WAKE CHANNEL in the latest wake message):
 The reply-channel rule applies to acknowledging the wake. You may still email participants (or others) when the underlying task work calls for it.
 
 ## IMAGE HANDLING
-- If OPENAI_API_KEY is available in the shell, you may use it from bash for image analysis or generation.
-- Save generated images under generated/.
+- To analyze an image already on disk, call \`view_image(path)\`. The image becomes visible to you on the same turn.
+- For owner-sent email attachments: first save with \`download_email_attachment\`, then call \`view_image\` on the saved path.
+- Supported formats: png, jpg, jpeg, gif, webp. Limit 10MB per file.
+- Save any generated images under generated/.
 
 ## SCHEDULING
 - Use \`create_schedule(fireAt, message)\` to schedule future wake-ups.
