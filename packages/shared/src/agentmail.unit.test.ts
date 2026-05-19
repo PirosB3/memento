@@ -3,6 +3,7 @@ import {
   coerceAgentMailAddressList,
   extractAgentMailThreadId,
   extractBareEmailAddress,
+  isAgentSelfEmail,
 } from "./agentmail";
 
 describe("AgentMail helpers", () => {
@@ -24,5 +25,13 @@ describe("AgentMail helpers", () => {
     expect(extractBareEmailAddress("person@example.com")).toBe("person@example.com");
     expect(extractBareEmailAddress("   ")).toBe("");
     expect(extractBareEmailAddress(null)).toBe("");
+  });
+
+  it("detects agent self-sent addresses without substring false positives", () => {
+    const agentEmail = "mario@agentmail.test";
+    expect(isAgentSelfEmail("Mario <mario@agentmail.test>", agentEmail)).toBe(true);
+    expect(isAgentSelfEmail("mario+abc@agentmail.test", agentEmail)).toBe(true);
+    expect(isAgentSelfEmail("Not Mario <notmario@evil.example>", agentEmail)).toBe(false);
+    expect(isAgentSelfEmail("Owner <owner@example.com>", agentEmail)).toBe(false);
   });
 });

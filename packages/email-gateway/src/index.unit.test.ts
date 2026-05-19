@@ -70,6 +70,19 @@ vi.mock("@summon/shared", () => ({
     const match = trimmed.match(/<([^>]+)>/);
     return (match?.[1] ?? trimmed).trim().toLowerCase();
   },
+  isAgentSelfEmail: (fromField: string, agentEmail: string) => {
+    const from = (() => {
+      const trimmed = fromField.trim();
+      const match = trimmed.match(/<([^>]+)>/);
+      return (match?.[1] ?? trimmed).trim().toLowerCase();
+    })();
+    if (!from) return false;
+    const [local, domain] = agentEmail.toLowerCase().split("@");
+    if (!local || !domain) return false;
+    const base = `${local}@${domain}`;
+    if (from === base) return true;
+    return from.startsWith(`${local}+`) && from.endsWith(`@${domain}`);
+  },
 }));
 
 import {
@@ -89,9 +102,14 @@ beforeEach(() => {
 });
 
 describe("email gateway helpers", () => {
-  it("detects self-sent messages by local part", () => {
+  it("detects self-sent messages by parsed address", () => {
     expect(isSelfSentEmail("Avery <avery@agentmail.test>", "avery@agentmail.test")).toBe(true);
+    expect(isSelfSentEmail("avery+abc@agentmail.test", "avery@agentmail.test")).toBe(true);
     expect(isSelfSentEmail("Owner <owner@example.com>", "avery@agentmail.test")).toBe(false);
+  });
+
+  it("does not treat similar local-part substrings as self-sent", () => {
+    expect(isSelfSentEmail("Not Mario <notmario@evil.example>", "mario@agentmail.test")).toBe(false);
   });
 });
 

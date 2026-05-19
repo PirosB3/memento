@@ -19,6 +19,7 @@ import {
   coerceAgentMailAddressList,
   extractAgentMailThreadId,
   extractBareEmailAddress,
+  isAgentSelfEmail,
 } from "@summon/shared";
 import type { InboundEmail } from "@summon/shared";
 
@@ -104,9 +105,7 @@ export async function pollAllInboxes(agentmail: AgentMailClient, temporal: Clien
 }
 
 export function isSelfSentEmail(fromField: string, agentEmail: string): boolean {
-  return fromField
-    .toLowerCase()
-    .includes(agentEmail.split("@")[0].toLowerCase() + "@");
+  return isAgentSelfEmail(fromField, agentEmail);
 }
 
 /**

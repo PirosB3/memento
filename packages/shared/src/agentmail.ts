@@ -16,3 +16,19 @@ export function extractBareEmailAddress(raw: string | undefined | null): string 
   const match = trimmed.match(/<([^>]+)>/);
   return (match?.[1] ?? trimmed).trim().toLowerCase();
 }
+
+/** True when `fromField` is the agent's base inbox or a tagged variant (local+tag@domain). */
+export function isAgentSelfEmail(fromField: string, agentEmail: string): boolean {
+  const from = extractBareEmailAddress(fromField);
+  if (!from) return false;
+
+  const [local, domain] = agentEmail.toLowerCase().split("@");
+  if (!local || !domain) return false;
+
+  const base = `${local}@${domain}`;
+  if (from === base) return true;
+
+  const taggedPrefix = `${local}+`;
+  const taggedSuffix = `@${domain}`;
+  return from.startsWith(taggedPrefix) && from.endsWith(taggedSuffix);
+}
