@@ -170,6 +170,109 @@ function describeInlineWakeSource(source: string): string {
   return source;
 }
 
+function hasPendingWakeSignals(
+  ownerQueue: string[],
+  scheduleQueue: ScheduleEvent[],
+  emailQueue: InboundEmail[],
+): boolean {
+  return ownerQueue.length > 0 || scheduleQueue.length > 0 || emailQueue.length > 0;
+}
+
+function buildWakeFromQueues(
+  ownerQueue: string[],
+  scheduleQueue: ScheduleEvent[],
+  emailQueue: InboundEmail[],
+  isRoot: boolean,
+  sleepMs: number,
+  options?: { escalated?: boolean },
+): WakeDetails {
+  const escalated = options?.escalated ?? false;
+
+  if (ownerQueue.length > 0) {
+    const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
+    if (ownerWake.kind === "email") {
+      return {
+        trigger: "owner_response",
+        wokenBy: "owner",
+        channel: "email",
+        triggerContext: escalated ? "Owner responded to escalation." : "Owner sent a message.",
+        metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
+        actionNow: escalated
+          ? "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed."
+          : "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
+      };
+    }
+
+    const inlineContext = ownerWake.message
+      ? escalated
+        ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated: ${ownerWake.message}`
+        : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} with message: ${ownerWake.message}`
+      : escalated
+        ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated.`
+        : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)}.`;
+    return {
+      trigger: "owner_response",
+      wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
+      channel: "ui",
+      triggerContext: inlineContext,
+      metadata: [
+        { label: "SOURCE", value: ownerWake.source },
+        ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
+      ],
+      actionNow: ownerWake.message
+        ? escalated
+          ? `Resolve the escalation using the inline instruction: ${ownerWake.message}`
+          : `Act on the inline instruction: ${ownerWake.message}`
+        : escalated
+          ? `Resolve the escalation using the inline instruction from ${describeInlineWakeSource(ownerWake.source)}.`
+          : `Act on the inline instruction from ${describeInlineWakeSource(ownerWake.source)}.`,
+    };
+  }
+
+  if (scheduleQueue.length > 0) {
+    const schedules = scheduleQueue.splice(0);
+    return {
+      trigger: "schedule",
+      wokenBy: "schedule",
+      channel: "scheduler",
+      triggerContext: `${schedules.length} scheduled timer(s) fired.`,
+      metadata: [
+        { label: "SCHEDULE_IDS", value: schedules.map((sched) => sched.scheduleId).join(", ") },
+        { label: "REMINDERS", value: schedules.map((sched) => sched.message).join(" | ") },
+      ],
+      actionNow: `Act on the scheduled reminder(s): ${schedules.map((sched) => `"${sched.message}"`).join(", ")}.`,
+    };
+  }
+
+  if (emailQueue.length > 0) {
+    const emails = emailQueue.splice(0);
+    const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
+    const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
+    return {
+      trigger: "email",
+      wokenBy: "email",
+      channel: "email",
+      triggerContext: `Received ${allMessageIds.length} email(s) from: ${allSenders.join(", ")}`,
+      metadata: [
+        { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
+        { label: "SENDERS", value: allSenders.join(", ") },
+      ],
+      actionNow: "Use read_emails or list_threads to pull the full batch and respond holistically.",
+    };
+  }
+
+  return {
+    trigger: "sleep_timeout",
+    wokenBy: "sleep",
+    channel: "system",
+    triggerContext: `Sleep timer expired after ${sleepMs}ms. No new emails received.`,
+    metadata: [{ label: "SLEEP_DURATION_MS", value: String(sleepMs) }],
+    actionNow: isRoot
+      ? "Check on child tasks with list_tasks() and decide whether to steer, spawn, or sleep again."
+      : "Review the TODO snapshot. If [ACTIONABLE] contains items, do the next one now. Use sleep only when [ACTIONABLE] is empty. If you are stuck or blocked, escalate to the owner instead of sleeping.",
+  };
+}
+
 function isoFromNow(ms: number): string {
   return new Date(Date.now() + Math.max(0, ms)).toISOString();
 }
@@ -741,7 +844,10 @@ async function activeLoop(
         if (decision.type === "escalate") {
           await runtime.setEscalatedState();
           currentState = "ESCALATED";
-          const gotResponse = await condition(() => ownerQueue.length > 0, ESCALATION_TIMEOUT_MS);
+          const gotResponse = await condition(
+            () => hasPendingWakeSignals(ownerQueue, scheduleQueue, emailQueue),
+            ESCALATION_TIMEOUT_MS,
+          );
           if (!gotResponse) {
             continue;
           }
@@ -751,77 +857,7 @@ async function activeLoop(
       continue;
     }
 
-    let wake: WakeDetails;
-
-    if (ownerQueue.length > 0) {
-      const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
-      if (ownerWake.kind === "email") {
-        wake = {
-          trigger: "owner_response",
-          wokenBy: "owner",
-          channel: "email",
-          triggerContext: "Owner sent a message.",
-          metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: "Use read_email with the MESSAGE_ID above to read the owner email, then act on it.",
-        };
-      } else {
-        const inlineContext = ownerWake.message
-          ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} with message: ${ownerWake.message}`
-          : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)}.`;
-        wake = {
-          trigger: "owner_response",
-          wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
-          channel: "ui",
-          triggerContext: inlineContext,
-          metadata: [
-            { label: "SOURCE", value: ownerWake.source },
-            ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
-          ],
-          actionNow: ownerWake.message
-            ? `Act on the inline instruction: ${ownerWake.message}`
-            : `Act on the inline instruction from ${describeInlineWakeSource(ownerWake.source)}.`,
-        };
-      }
-    } else if (scheduleQueue.length > 0) {
-      const schedules = scheduleQueue.splice(0);
-      wake = {
-        trigger: "schedule",
-        wokenBy: "schedule",
-        channel: "scheduler",
-        triggerContext: `${schedules.length} scheduled timer(s) fired.`,
-        metadata: [
-          { label: "SCHEDULE_IDS", value: schedules.map((sched) => sched.scheduleId).join(", ") },
-          { label: "REMINDERS", value: schedules.map((sched) => sched.message).join(" | ") },
-        ],
-        actionNow: `Act on the scheduled reminder(s): ${schedules.map((sched) => `"${sched.message}"`).join(", ")}.`,
-      };
-    } else if (emailQueue.length > 0) {
-      const emails = emailQueue.splice(0);
-      const allMessageIds = emails.flatMap((email) => email.batchMessageIds ?? [email.messageId]);
-      const allSenders = emails.flatMap((email) => email.batchSenders ?? [email.sender]);
-      wake = {
-        trigger: "email",
-        wokenBy: "email",
-        channel: "email",
-        triggerContext: `Received ${allMessageIds.length} email(s) from: ${allSenders.join(", ")}`,
-        metadata: [
-          { label: "MESSAGE_IDS", value: allMessageIds.join(", ") },
-          { label: "SENDERS", value: allSenders.join(", ") },
-        ],
-        actionNow: "Use read_emails or list_threads to pull the full batch and respond holistically.",
-      };
-    } else {
-      wake = {
-        trigger: "sleep_timeout",
-        wokenBy: "sleep",
-        channel: "system",
-        triggerContext: `Sleep timer expired after ${sleepMs}ms. No new emails received.`,
-        metadata: [{ label: "SLEEP_DURATION_MS", value: String(sleepMs) }],
-        actionNow: isRoot
-          ? "Check on child tasks with list_tasks() and decide whether to steer, spawn, or sleep again."
-          : "Review the TODO snapshot. If [ACTIONABLE] contains items, do the next one now. Use sleep only when [ACTIONABLE] is empty. If you are stuck or blocked, escalate to the owner instead of sleeping.",
-      };
-    }
+    const wake = buildWakeFromQueues(ownerQueue, scheduleQueue, emailQueue, isRoot, sleepMs);
 
     decision = await processWakeTurn(taskId, wake, {
       includeContextSeed: false,
@@ -840,43 +876,24 @@ async function activeLoop(
       await runtime.setEscalatedState();
       currentState = "ESCALATED";
 
-      const gotResponse = await condition(() => ownerQueue.length > 0, ESCALATION_TIMEOUT_MS);
+      const gotResponse = await condition(
+        () => hasPendingWakeSignals(ownerQueue, scheduleQueue, emailQueue),
+        ESCALATION_TIMEOUT_MS,
+      );
       if (!gotResponse) {
         await runtime.setSleepingState(decision.sleepDurationMs ?? DAY_MS);
         currentState = "SLEEPING";
         continue;
       }
 
-      const ownerWake = parseOwnerWakeEvent(ownerQueue.shift()!);
-      let escalationWake: WakeDetails;
-
-      if (ownerWake.kind === "email") {
-        escalationWake = {
-          trigger: "owner_response",
-          wokenBy: "owner",
-          channel: "email",
-          triggerContext: "Owner responded to escalation.",
-          metadata: [{ label: "MESSAGE_ID", value: ownerWake.messageId }],
-          actionNow: "Use read_email with the MESSAGE_ID above to read the owner's escalation response, then proceed.",
-        };
-      } else {
-        const inlineContext = ownerWake.message
-          ? `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated: ${ownerWake.message}`
-          : `Received an inline wake from ${describeInlineWakeSource(ownerWake.source)} while escalated.`;
-        escalationWake = {
-          trigger: "owner_response",
-          wokenBy: ownerWake.source === "root_task" ? "root_task" : "owner",
-          channel: "ui",
-          triggerContext: inlineContext,
-          metadata: [
-            { label: "SOURCE", value: ownerWake.source },
-            ...(ownerWake.message ? [{ label: "INLINE_MESSAGE", value: ownerWake.message }] : []),
-          ],
-          actionNow: ownerWake.message
-            ? `Resolve the escalation using the inline instruction: ${ownerWake.message}`
-            : `Resolve the escalation using the inline instruction from ${describeInlineWakeSource(ownerWake.source)}.`,
-        };
-      }
+      const escalationWake = buildWakeFromQueues(
+        ownerQueue,
+        scheduleQueue,
+        emailQueue,
+        isRoot,
+        sleepMs,
+        { escalated: true },
+      );
 
       decision = await processWakeTurn(taskId, escalationWake, {
         includeContextSeed: false,
