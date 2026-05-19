@@ -32,6 +32,14 @@ async function getTemporalClient(): Promise<Client> {
   return temporalClient;
 }
 
+async function terminateChildTaskWorkflow(taskId: string): Promise<void> {
+  const temporal = await getTemporalClient();
+  const handle = temporal.workflow.getHandle(`task-${taskId}`);
+  await handle.terminate("Cancelled by root task").catch((err) => {
+    log.warn(`Could not terminate workflow task-${taskId}: ${String(err)}`);
+  });
+}
+
 export function createSpawnTaskTool(agentId: string): AgentTool {
   return {
     name: "spawn_task",
@@ -219,6 +227,7 @@ export function createCancelTaskTool(): AgentTool {
           where: { taskId },
           data: { status: "COMPLETED", completedAt: new Date(), lastActivityAt: new Date() },
         });
+        await terminateChildTaskWorkflow(taskId);
         return {
           content: [{ type: "text" as const, text: `Task ${taskId} has been cancelled.` }],
           details: { taskId },
