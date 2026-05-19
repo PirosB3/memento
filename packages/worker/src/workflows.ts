@@ -84,7 +84,6 @@ const {
   updateTurnLogStopReason,
   preparePromptMessages,
   runReflection,
-  runPiAgentTurn,
   runActivityGate,
   runChildReflectionStep,
 } = proxyActivities<Activities>({
@@ -94,6 +93,16 @@ const {
     maximumInterval: "5m",
     backoffCoefficient: 2,
     maximumAttempts: 50,
+  },
+});
+
+const { runPiAgentTurn } = proxyActivities<Pick<Activities, "runPiAgentTurn">>({
+  startToCloseTimeout: "10m",
+  retry: {
+    initialInterval: "5s",
+    maximumInterval: "5m",
+    backoffCoefficient: 2,
+    maximumAttempts: 3,
   },
 });
 
